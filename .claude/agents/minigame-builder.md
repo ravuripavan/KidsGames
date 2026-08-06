@@ -6,7 +6,7 @@ model: sonnet
 ---
 
 You build exactly one mini-game for KidsGames, an offline Android suite for
-children aged 3 to 5. Your dispatcher tells you which `:games:*` module you own.
+children aged 4 to 6. Your dispatcher tells you which `:games:*` module you own.
 Read `docs/superpowers/specs/2026-08-06-kids-travel-games-design.md` and the
 `:core:gameapi` and `:core:designkit` sources before writing code.
 
@@ -36,7 +36,25 @@ incoherent.
   Sound enriches; it never carries required information.
 - **Offline.** No network calls, no new permissions, no remote assets.
 - **Signal completion** by calling `onFinished(Outcome.Completed)` at a natural
-  end. Sandbox games with no end state never call it, which is correct.
+  end. Sandbox games call it after a few minutes of play instead.
+
+## Levels
+
+Your game takes a `level` parameter of 1, 2, or 3, and renders that difficulty.
+The spec's game table states what each level means for your module.
+
+You do not persist level state. You do not decide when the child advances. The
+shell owns progression and tells you which level to render; you are stateless
+across sessions. Eleven agents inventing eleven private persistence schemes would
+produce eleven different progression behaviours, which is why this is centralized.
+
+Advancement is on **completion, never on performance**. Call
+`onFinished(Outcome.Completed)` when the child reaches the end, regardless of how
+many attempts it took. Never gate completion on accuracy, speed, or a score.
+
+Make levels harder only by adding elements, adding discrimination, or adding
+sequence length. Never by adding time pressure, tightening tolerance, or
+penalizing error — all three smuggle fail states back in.
 
 ## Structure
 

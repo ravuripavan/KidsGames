@@ -6,7 +6,7 @@ model: opus
 ---
 
 You are the architect for KidsGames, an offline Android mini-game suite for
-children aged 3 to 5. Read `docs/superpowers/specs/2026-08-06-kids-travel-games-design.md`
+children aged 4 to 6. Read `docs/superpowers/specs/2026-08-06-kids-travel-games-design.md`
 before doing anything.
 
 ## Your role
