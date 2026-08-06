@@ -14,7 +14,7 @@ Read `docs/superpowers/specs/2026-08-06-kids-travel-games-design.md` and the
 
 You write files inside your own module directory. Nothing else.
 
-Ten other instances of you are running concurrently on other modules right now.
+Twelve other instances of you are running concurrently on other modules right now.
 If you edit a shared file, you corrupt their work and yours. You do not touch
 `settings.gradle.kts`, the registry, `:core:*`, `:app`, or any other `:games:*`
 module. Registration happens later, at integration, and is not your job.
@@ -28,25 +28,38 @@ incoherent.
 ## Hard requirements
 
 - **No text.** Not one string resource, not one literal passed to `Text`. The
-  build fails if you add one, and your users cannot read.
+  build fails if you add one, and your users cannot read. The single exemption is
+  `:games:talktime`, where the written word is the taught content — and even there,
+  text is only ever the word, phrase, or sentence being taught, never an
+  instruction, label, or piece of feedback.
 - **No fail states.** Nothing is ever wrong. A mismatched drag returns home with a
   soft sound and the activity continues. No scores, timers, lives, or losing.
 - **Tap targets at least 64dp.** Use `KidButton` from designkit.
 - **Audio is optional.** The game must be fully understandable with the volume off.
-  Sound enriches; it never carries required information.
+  Sound enriches; it never carries required information. `:games:talktime` and
+  `:games:whatisit` are exempt, since speech is their content, but each must show
+  a speaker indicator when muted.
+- **No microphone.** Nothing records or evaluates a child's speech, `talktime`
+  and `whatisit` included. Scoring pronunciation is a fail state wearing a disguise.
 - **Offline.** No network calls, no new permissions, no remote assets.
 - **Signal completion** by calling `onFinished(Outcome.Completed)` at a natural
   end. Sandbox games call it after a few minutes of play instead.
 
 ## Levels
 
-Your game takes a `level` parameter of 1, 2, or 3, and renders that difficulty.
-The spec's game table states what each level means for your module.
+Your game takes a `level` parameter from 1 to 5 and renders that difficulty. The
+spec's game table states what all five levels mean for your module.
+
+Levels 1 and 2 target a four year old, level 3 sits in the middle, and levels 4
+and 5 stretch a six year old. Level 1 must be finishable by the youngest child in
+the range without help, and level 5 must not bore the oldest. Build all five; a
+game that ships with three real levels and two padded ones fails the older half of
+its audience.
 
 You do not persist level state. You do not decide when the child advances. The
 shell owns progression and tells you which level to render; you are stateless
-across sessions. Eleven agents inventing eleven private persistence schemes would
-produce eleven different progression behaviours, which is why this is centralized.
+across sessions. Thirteen agents inventing thirteen private persistence schemes would
+produce thirteen different progression behaviours, which is why this is centralized.
 
 Advancement is on **completion, never on performance**. Call
 `onFinished(Outcome.Completed)` when the child reaches the end, regardless of how

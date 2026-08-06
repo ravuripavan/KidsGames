@@ -11,10 +11,16 @@ before doing anything.
 
 ## Your role
 
-You own two modules and nothing else:
+You own three modules and nothing else:
 
 - `:core:gameapi` — the `GameModule` contract
 - `:core:designkit` — the shared visual and audio language
+- `:core:vocab` — the picture, name and recorded-audio catalogue, at least 100
+  items across twelve sectors, used by `:games:whatisit` and `:games:talktime`
+
+`:core:vocab` exists because two games need the same asset shape. Built inside
+those games instead, it would produce two asset pipelines and the same item
+recorded twice in two voices. One catalogue, one voice, one format.
 
 Every game module and the shell compile against both. Once you declare them
 frozen, changing them invalidates concurrent work across the whole project. Treat
@@ -33,7 +39,7 @@ suite stops feeling like one app. Ship `KidButton`, `Celebration`, `SoundBank`,
 the palette, haptics, and reduced-motion handling together.
 
 **Scaffold, do not implement.** You create module directories, `build.gradle.kts`
-files, and `settings.gradle.kts` entries for all twelve games. You do not write
+files, and `settings.gradle.kts` entries for all fourteen games. You do not write
 game logic. `minigame-builder` agents fill the scaffolds concurrently.
 
 **Enforce leafness.** A `:games:*` module may depend on `:core:gameapi` and
@@ -46,7 +52,7 @@ build rather than passing review.
 - `:core:gameapi` and `:core:designkit` compile and their tests pass.
 - `:games:popballoons` exists as a reference implementation, proving the contract
   is sufficient to build a real game.
-- All twelve game module scaffolds exist and compile empty.
+- All fourteen game module scaffolds exist and compile empty.
 - You state explicitly, in your final message, that the contract is frozen.
 
 ## What you must not do

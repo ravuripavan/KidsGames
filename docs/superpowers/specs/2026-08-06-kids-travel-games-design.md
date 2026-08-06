@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-06
 **Status:** Design approved, pending spec review
-**Repo:** https://github.com/ravuripavan/KigsGames
+**Repo:** https://github.com/ravuripavan/KidsGames
 
 ## Problem
 
@@ -17,7 +17,7 @@ adult intervening.
 The 4–6 range spans a literacy boundary. A four year old is a pure pre-reader; a
 six year old reads sentences and is bored by activities pitched at a four year
 old. The suite handles this in two ways: it stays entirely text-free, which costs
-the older child nothing, and each game carries three difficulty levels so the same
+the older child nothing, and each game carries five difficulty levels so the same
 activity meets both ends of the range.
 
 ## Constraints
@@ -25,9 +25,10 @@ activity meets both ends of the range.
 These are hard requirements. Every design decision below follows from them.
 
 - **No text.** No words anywhere in the UI. All meaning is carried by picture,
-  animation, colour, and sound. Numerals are the single exception: digits 1–3 may
-  appear as level indicators, since they are legible to the older half of the range
-  and are decorative to the younger half.
+  animation, colour, and sound. Numerals are one exception: digits 1–5 may appear
+  as level indicators, since they are legible to the older half of the range and
+  decorative to the younger half. `:games:talktime` is the other, and the only
+  module permitted to render words — see below.
 - **Offline.** The app declares no `INTERNET` permission. Nothing loads from a
   network at any time.
 - **No fail states.** Nothing is ever wrong. Incorrect input produces a neutral,
@@ -37,7 +38,8 @@ These are hard requirements. Every design decision below follows from them.
   monetization, no ads, no analytics, no data collection of any kind.
 - **One-handed portrait play.** The device is held in a car seat by a small child.
 - **Audio is optional.** Sound enhances every activity but is never required to
-  understand one, because headphones may be unavailable.
+  understand one, because headphones may be unavailable. `:games:talktime` and
+  `:games:whatisit` are the only exemptions, since speech is their content.
 - **Low battery draw.** Animations pause when the activity is not visible.
 
 ## Stack
@@ -65,8 +67,10 @@ The system is a host shell plus a set of independent game plugins.
 :app                     Application entry point, wires everything together
 :core:gameapi            The GameModule contract. Depends on nothing but Compose.
 :core:designkit          Shared visual and audio language
+:core:vocab              Bundled catalogue of pictures, names and recorded audio
 :core:shell              Registry, session orchestrator, parental gate, progress store
-:games:<name>            One module per mini-game. Depends on gameapi + designkit only.
+:games:<name>            One module per mini-game. Depends on gameapi + designkit
+                         (+ vocab, for the two language games) only.
 ```
 
 The critical property is that `:games:*` modules never depend on each other and
@@ -87,7 +91,7 @@ interface GameModule {
     val icon: Int               // drawable resource shown on the picker
     val ageBand: AgeBand        // FOUR_TO_FIVE or FIVE_TO_SIX
     val estimatedMinutes: Int   // used by the orchestrator to pace rotation
-    val levelCount: Int         // always 3 in the first wave
+    val levelCount: Int         // always 5 in the first wave
 
     @Composable
     fun Play(level: Int, onFinished: (Outcome) -> Unit)
@@ -105,8 +109,8 @@ A game signals completion by invoking `onFinished`. It does not navigate, does n
 know the shell exists, does not know what other games exist, and does not persist
 its own level — the shell owns progression and passes `level` in.
 
-Keeping level state out of the game module matters for concurrency: eleven agents
-writing eleven private persistence schemes would produce eleven subtly different
+Keeping level state out of the game module matters for concurrency: thirteen agents
+writing thirteen private persistence schemes would produce thirteen subtly different
 progression behaviours. The game renders the difficulty it is told to render.
 
 ### `:core:designkit` — the shared language
@@ -124,6 +128,42 @@ ripples into all of them.
 - **Haptics.** Light tick on tap, medium on success.
 - **Reduced motion.** Honours the system animation scale; when animations are
   disabled system-wide, transitions become instant rather than absent.
+
+### `:core:vocab` — the picture and word catalogue
+
+Frozen in Phase 1 alongside `gameapi` and `designkit`, because two games depend on
+it: `:games:whatisit` and `:games:talktime`.
+
+It exists because both games need the same asset shape — a picture, a name, and a
+recording of that name. Built separately they would produce two asset pipelines,
+two audio formats, and the same banana recorded twice in two different voices. One
+catalogue, one voice, one format.
+
+```kotlin
+data class VocabItem(
+    val id: String,
+    val image: Int,       // bundled drawable
+    val audio: Int,       // bundled recording of the spoken name
+    val word: String,     // written form; rendered only by talktime
+    val sector: Sector,
+    val tier: Int,        // 1..5, how familiar the item is to a 4-6 year old
+)
+
+enum class Sector {
+    ANIMALS, FRUITS, VEGETABLES, VEHICLES, BODY, CLOTHES,
+    HOUSEHOLD, FOOD, NATURE, JOBS, INSTRUMENTS, SPORTS
+}
+```
+
+At least 100 items across the twelve sectors, with no sector below six items so no
+level is dominated by one category. `tier` drives level selection: tier 1 holds
+things a four year old already names (banana, dog, car), tier 5 holds things a six
+year old is still acquiring (helicopter, thermometer, mechanic).
+
+All audio is one voice, recorded at one level, bundled in the APK. No
+text-to-speech at runtime: TTS quality and voice vary by device and would make the
+suite sound different on each phone, and it is a dependency the app does not need
+while offline.
 
 ### `:core:shell` — the host
 
@@ -148,7 +188,7 @@ ripples into all of them.
 
 ### Levels and progression
 
-Every game has three levels. Levels exist to encourage the child and to stretch
+Every game has five levels. Levels exist to encourage the child and to stretch
 the activity across the 4–6 range, not to test them.
 
 **Advancement is on completion, never on performance.** A child who needs forty
@@ -157,13 +197,13 @@ score threshold, no star rating, no minimum accuracy, and no time requirement.
 Finishing is the only condition, and every level can be finished by every child in
 the range given enough taps.
 
-**Progression is never lost.** Once level 3 is reached in a game, it stays
+**Progression is never lost.** Once level 5 is reached in a game, it stays
 reached. There is no demotion, no streak to break, and no decay over time. A child
 returning after a week starts where they left off.
 
 **All unlocked levels stay playable.** A child who prefers level 1 may replay it
 indefinitely. The picker shows the highest level reached, and a press-and-hold on
-a game reveals the unlocked levels as one, two, or three dots so a child can drop
+a game reveals the unlocked levels as one to five dots so a child can drop
 back down without an adult.
 
 **Levels are not locked behind failure — only behind absence.** Level 2 becomes
@@ -183,12 +223,12 @@ one of three shapes:
 Difficulty never increases by adding time pressure, reducing tolerance, or
 punishing error, because all three reintroduce fail states through the back door.
 
-Reaching level 3 in a game triggers a larger, distinct celebration and adds a
+Reaching level 5 in a game triggers a larger, distinct celebration and adds a
 permanent mark to that game's picker tile. This is the app's only long-term goal
 and the main reason a child returns to a game rather than drifting away from it.
 
 Sandbox games — `musicpad`, `cardesign`, `carwash` — have no completion state, so
-their three levels unlock **tools rather than challenge**: more instruments, more
+their five levels unlock **tools rather than challenge**: more instruments, more
 paint colours and stickers, more wash implements. A sandbox level advances after a
 few minutes of play rather than on completion, so open play is rewarded on the same
 schedule as goal-directed play.
@@ -198,22 +238,119 @@ schedule as goal-directed play.
 Ten games, all buildable against the same contract. Each is a leaf module with no
 knowledge of the others.
 
-| Module | Activity | Levels 1 → 2 → 3 |
-|---|---|---|
-| `:games:popballoons` | Tap floating balloons; each pops with a sound and colour burst | 5 balloons → 10, drifting → 15, drifting and varied sizes |
-| `:games:matchshapes` | Drag a shape to its matching hole | 3 shapes → 5 → 7 with rotation needed |
-| `:games:countanimals` | Tap animals one at a time; each tap speaks the next number | count to 3 → to 5 → to 10 |
-| `:games:colorsort` | Drag items into matching colour bins | 2 colours → 4 colours → sort by colour and shape together |
-| `:games:tracelines` | Trace a dotted path with a finger; the line fills in behind | straight line → curve → shape outline |
-| `:games:animalsounds` | Tap an animal, hear its sound, watch it animate | 4 animals → 8 → find-the-animal-by-its-sound |
-| `:games:puzzlefour` | Drag-and-drop jigsaw with generous snapping | 4 pieces → 6 → 9 |
-| `:games:memorypairs` | Picture memory match | 3 pairs → 5 → 8 |
-| `:games:musicpad` | Pads that each play a note and animate. Sandbox | 4 pads → 8 pads → 8 pads with a second instrument |
-| `:games:carrace` | Endless lane-based drive. Tap or tilt to switch lanes and collect stars | 2 lanes → 3 lanes with obstacles → 3 lanes, obstacles, ramps |
-| `:games:cardesign` | Drag paint, wheels, and stickers onto a car. Sandbox | 4 colours → plus wheels and stickers → plus body shapes |
-| `:games:carwash` | Drag sponge, hose, and dryer over a dirty car until it shines | sponge → plus hose and dryer → plus wax and a dirtier car |
+Levels 1 and 2 target a four year old, level 3 sits in the middle, and levels 4
+and 5 stretch a six year old. The step from 1 to 5 is deliberately large, because
+a single game must serve both ends of the range.
 
-Three of the twelve are open-ended sandboxes with no completion state, because
+| Module | Activity | L1 | L2 | L3 | L4 | L5 |
+|---|---|---|---|---|---|---|
+| `:games:whatisit` | Shows a picture and asks what it is; tapping the speaker says the name aloud | familiar items | plus household and vehicles | plus nature and clothes | plus jobs and instruments | all sectors, plus find-the-one-I-name |
+| `:games:talktime` | Daily word and sentence, spoken aloud with a picture, for the child to repeat | word alone | word plus its picture named | two-word phrase | short sentence | sentence, then pick its matching picture |
+| `:games:popballoons` | Tap floating balloons; each pops with a colour burst and a spoken colour name | 5, still | 8, drifting | 12, varied sizes | 15, pop only one named colour | 15, pop in colour order |
+| `:games:matchshapes` | Drag a shape to its matching hole | 3 shapes | 5 shapes | 7 shapes | 7 with rotation | 7 rotated, similar shapes |
+| `:games:countanimals` | Tap animals one at a time; each tap speaks the next number | to 5 | to 10 | pick the matching numeral | count two groups | simple addition to 10 |
+| `:games:colorsort` | Drag items into matching bins | 2 colours | 3 colours | 4 colours | colour and shape | colour, shape and size |
+| `:games:tracelines` | Trace a dotted path with a finger; the line fills in behind | straight line | curve | zigzag | shape outline | letter outline |
+| `:games:patterns` | Complete a repeating sequence by tapping the piece that comes next | AB | ABAB | AABB | ABC | ABC with colour and shape varying |
+| `:games:puzzleboard` | Drag-and-drop jigsaw with generous snapping | 4 pieces | 6 | 9 | 12 | 12 with no background outline |
+| `:games:memorypairs` | Picture memory match | 3 pairs | 4 | 6 | 8 | 10 |
+| `:games:musicpad` | Pads that each play a note and animate. Sandbox | 4 pads | 6 pads | 8 pads | second instrument | record and replay a tune |
+| `:games:carrace` | Endless lane-based drive. Tap or tilt to switch lanes and collect stars | 2 lanes | 3 lanes | plus obstacles | plus ramps | plus branching roads |
+| `:games:cardesign` | Drag paint, wheels, and stickers onto a car. Sandbox | 4 colours | 8 colours | plus wheels | plus stickers | plus body shapes |
+| `:games:carwash` | Drag sponge, hose, and dryer over a dirty car until it shines. Sandbox | sponge | plus hose | plus dryer | plus wax and polish | dirtier car, all tools |
+
+Changes from the initial draft, following the shift to ages 4–6:
+
+- **`animalsounds` removed.** Tapping an animal to hear a noise has no level-3 form
+  that stretches a six year old, and its picture-plus-audio pairing is absorbed by
+  `talktime`, which does the same thing with transferable vocabulary.
+- **`patterns` added.** Sequence completion is the strongest single predictor of
+  early maths readiness in this band, and it levels cleanly from ABAB to ABCABC.
+- **`puzzlefour` renamed `puzzleboard`**, since the piece count is now a level
+  rather than a fixed property of the game.
+- **`countanimals` starts at five, not three**, and its upper levels introduce numeral
+  recognition, which is appropriate at five to six and was not at three.
+- **`tracelines` level 5 is letter outlines**, which prepares handwriting for
+  the older half without requiring any reading.
+
+### `:games:whatisit` — naming pictures
+
+A picture fills the screen. The child is invited to say what it is. Tapping the
+speaker button plays the recorded name — *banana* — and the picture animates in
+response. A next arrow brings the following item.
+
+The child's answer is never captured or checked. The pause before tapping the
+speaker is the whole activity: the child names it privately, then hears whether
+they matched. Nothing is scored, so a child who says nothing and a child who names
+every item both proceed identically.
+
+**Levels widen the catalogue rather than tightening the task.** Level 1 draws only
+tier-1 items from the most familiar sectors; each level adds sectors and admits
+higher tiers. Level 5 draws from all twelve sectors and adds a reverse mode: three
+pictures are shown, a name is spoken, and the child taps the one that matches.
+Reverse mode is receptive rather than productive recall, which is meaningfully
+harder and is the right stretch for a six year old.
+
+A wrong tap in reverse mode is not wrong. The tapped picture is named aloud —
+*that's a carrot* — and the round continues until the child finds the match. The
+child is told what they picked, never that they erred.
+
+**Audio exemption.** Like `talktime`, this game needs sound: the spoken name is
+its content. It shows a speaker indicator when the device is muted. It renders no
+text, so it takes no text exemption — the word is heard, never written.
+
+**No microphone.** The child's speech is never recorded or evaluated, for the same
+reasons as `talktime`.
+
+### `:games:talktime` — speech and sentences
+
+A daily word and a daily sentence, spoken aloud alongside a picture, for the child
+to hear and repeat. It is the only module in the suite that teaches language
+directly, and it is the only one that needs exemptions from two hard constraints.
+
+**Text exemption.** This module may render words on screen. Elsewhere text is
+noise a pre-reader cannot use; here the written form is the point, and a five or
+six year old connecting a heard word to its written shape is the entire
+educational value. The word appears beneath its picture, large and uncrowded. A
+four year old ignores it harmlessly.
+
+This exemption is scoped to `:games:talktime` alone. The repo-wide no-text build
+check allowlists this one module and continues to fail the build for the other
+thirteen.
+
+**Audio exemption.** Every other game is fully playable with the volume off. This
+one is not, because speech is its content. It shows a visible speaker indicator so
+a child who hears nothing understands why, and the shell deprioritizes it in
+rotation when the device is muted.
+
+**No microphone.** The app never records or evaluates the child's speech. This is
+deliberate on three grounds: offline recognition handles four-year-old
+articulation poorly, recording requires a permission this app otherwise avoids
+entirely, and — decisively — any attempt to score pronunciation would introduce a
+fail state into the app's most emotionally exposed activity. A child who is told
+they said a word wrong stops saying words. Nothing is judged, so nothing can be
+wrong.
+
+**Daily rotation, offline.** The word and sentence pools are bundled assets with
+pre-recorded audio. The pair for a given day is selected deterministically from
+the day of the year, so it changes daily, is identical across restarts within a
+day, and never touches the network. The pool holds a full year with no repeats;
+after a year it cycles, which is invisible at this age.
+
+Content is ordinary daily-use language — greetings, needs, courtesies, and the
+objects of a child's day: *water*, *thank you*, *I am hungry*, *can I have more*,
+*where are we going*. Travel-relevant phrasing is over-represented, since that is
+the context of use.
+
+**Levels.** Level 1 presents the day's word alone. Level 2 presents it inside a
+two-word phrase. Level 3 presents the full sentence. Each level plays the audio,
+shows the picture, pauses for the child to repeat, then celebrates
+unconditionally — the pause is a turn-taking cue, not a test.
+
+A "say it again" control replays the audio without limit, because repetition is
+how the activity works and a child will ask for it many times.
+
+Three of the fourteen are open-ended sandboxes with no completion state, because
 some children settle into open play and a suite of only goal-directed activities
 pushes them out of the app.
 
@@ -227,7 +364,7 @@ creep back in. There is no crash, no lap timer, no opponent, and no way to lose.
 Obstacles slow the car and produce a soft bounce rather than ending the run. The
 car cannot leave the road, and the drive continues until the child stops.
 
-"As many as fit" was the stated scope. Twelve is the first wave; the contract
+"As many as fit" was the stated scope. Fourteen is the first wave; the contract
 imposes no ceiling, and later games are added without modifying any existing
 module.
 
@@ -245,7 +382,7 @@ and it should not block the first playable build.
 sufficient. Stand up a minimal `:core:shell` and `:app` so the reference game is
 reachable from a launch icon. Nothing else starts until this phase is merged.
 
-**Phase 2 — parallel.** All remaining eleven game modules, concurrently. Each
+**Phase 2 — parallel.** All remaining thirteen game modules, concurrently. Each
 worker owns exactly one `:games:*` directory and touches no file outside it.
 Registration is applied at integration rather than by the workers.
 
@@ -259,7 +396,7 @@ breaks at once.
 ### The per-game development loop
 
 Each game module runs through an automated loop with no human in the middle. The
-loop is per-game, so eleven of them run concurrently in Phase 2.
+loop is per-game, so thirteen of them run concurrently in Phase 2.
 
 ```
 build  →  review  →  findings?  ──yes──→  fix  ──→  re-review ──┐
@@ -299,7 +436,7 @@ seconds, not by an emulator run several minutes later.
 single emulator concurrently interleaves input and produces meaningless results.
 Games queue for the emulator one at a time after passing their unit tests, so the
 e2e stage is a drain rather than a fan-out. Total e2e wall-clock is therefore
-roughly twelve sequential runs, and it dominates the tail of Phase 3.
+roughly fourteen sequential runs, and it dominates the tail of Phase 3.
 
 If throughput becomes the constraint, the fix is more AVDs rather than more
 agents. Nothing else in the loop is contended.

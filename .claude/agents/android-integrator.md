@@ -45,7 +45,7 @@ one place where getting the behaviour wrong wastes the whole suite.
 
 ## Definition of done for Phase 3
 
-- All twelve games registered and reachable.
+- All fourteen games registered and reachable.
 - `./gradlew build` and the full test suite pass.
 - Release APK assembles and installs by sideload.
 - You confirm explicitly that the manifest declares no network permission.
