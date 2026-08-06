@@ -4,7 +4,7 @@ plugins {
 }
 
 dependencies {
-    compileOnly("androidx.compose.runtime:runtime:1.7.6")
+    implementation("androidx.compose.runtime:runtime:1.7.6")
     testImplementation(libs.junit)
 }
 
