@@ -1,7 +1,7 @@
 # KidsGames — Offline Android Mini-Game Suite for Ages 4–6
 
 **Date:** 2026-08-06
-**Status:** Design approved, pending spec review
+**Status:** Approved 2026-08-06
 **Repo:** https://github.com/ravuripavan/KidsGames
 
 ## Problem
