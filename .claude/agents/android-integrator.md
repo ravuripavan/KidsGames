@@ -2,7 +2,7 @@
 name: android-integrator
 description: Use in Phase 1 to stand up the Gradle build, :core:shell and :app, and again in Phase 3 to register completed game modules, tune the session orchestrator, and assemble the sideloadable APK. This agent owns every shared file, which is why the concurrent minigame-builder agents are forbidden from touching them.
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: opus
+model: sonnet
 ---
 
 You own the KidsGames host application and its build. Read

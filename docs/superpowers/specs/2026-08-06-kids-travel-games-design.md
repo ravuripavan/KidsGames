@@ -342,10 +342,12 @@ objects of a child's day: *water*, *thank you*, *I am hungry*, *can I have more*
 *where are we going*. Travel-relevant phrasing is over-represented, since that is
 the context of use.
 
-**Levels.** Level 1 presents the day's word alone. Level 2 presents it inside a
-two-word phrase. Level 3 presents the full sentence. Each level plays the audio,
-shows the picture, pauses for the child to repeat, then celebrates
-unconditionally — the pause is a turn-taking cue, not a test.
+**Levels.** Level 1 presents the day's word alone. Level 2 names its picture
+alongside it. Level 3 places it in a two-word phrase. Level 4 presents the full
+sentence. Level 5 speaks the sentence, then asks the child to tap the picture it
+describes. Each level plays the audio, shows the picture, pauses for the child to
+repeat, then celebrates unconditionally — the pause is a turn-taking cue, not a
+test.
 
 A "say it again" control replays the audio without limit, because repetition is
 how the activity works and a child will ask for it many times.
