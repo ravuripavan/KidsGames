@@ -28,9 +28,8 @@ android {
 }
 
 dependencies {
-    // Leafness: this module may depend ONLY on core:gameapi, core:designkit,
-    // and (whatisit/talktime only) core:vocab. Never core:shell, :app, or
-    // another :games:* module.
+    // Leafness: this module may depend ONLY on core:gameapi and core:designkit.
+    // Never core:shell, :app, or another :games:* module.
     implementation(project(":core:gameapi"))
     implementation(project(":core:designkit"))
 
