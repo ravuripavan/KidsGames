@@ -381,6 +381,79 @@ thing the palette rule says never to do.
 
 ---
 
+## `:games:talktime` — parked 2026-08-07
+
+Three review rounds, three fix rounds, plus two integrator fixes after the rounds
+were spent. Builds green, 23 tests pass, and almost everything about it is right.
+It is not registered in the app.
+
+**What works.** The text exemption is used honestly: exactly one `Text` call,
+rendering only the taught word, phrase or sentence, with no instruction, label or
+feedback string anywhere — and it is the sole entry in the build gate's allowlist,
+so nothing else can hide behind it. No microphone, no manifest, no permissions, no
+network. No fail states: a wrong tap returns the state byte-for-byte unchanged,
+`acknowledge()` is unconditional, replays are unlimited. `Sentence.image` drives the
+level-5 target on all 365 days with a collision guard making two identical-looking
+options unreachable. Every control sits outside the scroll region and fits at 1.15x
+and 1.3x Display size — the footer is measured before the weighted scroll, so it
+cannot be squeezed until roughly 1.74x density, which is unreachable. Determinism is
+real and tested across a full year.
+
+**Why it is parked.**
+
+**B1 — it renders "a astronaut".** The level-3 phrase rule gives `Sector.JOBS`
+entries `"a $word"` with no `a`/`an` selection. `astronaut` is the only vowel-initial
+JOBS entry, so on day 122 and day 266 a five or six year old is shown, at 32sp, the
+phrase they are being taught to read and say: *a astronaut*. In the one module
+allowed to render text, whose exemption exists because the written form is the
+educational point.
+
+**B2 — level 3's audio is not level 3's text.** Level 3 displays `phraseText`, built
+from the word pool, while `playRaw` plays `sentence.audio` from the independent
+sentence pool. The module's own KDoc states those two pools share no key. So the
+child sees "my spoon" and hears a sentence about something else. This is the module
+that took the audio exemption because speech IS its content, and level 3 is the one
+level where what is heard and what is read are about different things.
+
+This cannot be fixed by choosing a different id: `phraseText` is synthesised at
+runtime, so no recording of it can exist. `word.audio` is the closest honest match,
+but level 3 then plays a single word while showing a two-word phrase. Which of those
+is right is a content decision.
+
+**H1 — eight NATURE entries take a possessive that is not possessable.** `my sun`,
+`my moon`, `my rain`, `my snow`, `my mountain`, `my river`, `my rainbow`,
+`my volcano` — sixteen days a year. The fix's own stated principle is "a child does
+not own a person"; the same reasoning applies to the weather and the sky and was not
+carried there.
+
+**The integrator's part, recorded plainly, because it is the point.** This module's
+phrase logic has now been fixed three times, and each fix covered exactly the cases
+that had been reported to it:
+
+- Round 3 special-cased three gerunds by name. Ten more of the same class survived.
+- The integrator then replaced the blocklist with a rule keyed on the item's
+  grammatical class — activities take the verb English uses with them, jobs take an
+  article — and rewrote the test to enumerate all 144 entries rather than sampling.
+  That fixed the reported classes and introduced B1, because the article rule was
+  written for the consonant-initial jobs that had been named.
+- The strengthened test cannot catch B1 either. Both of its semantic assertions sit
+  inside `if (phrase.startsWith("my "))`, so `a astronaut` passes, as would
+  `go doctor` or `the swimming`. It enumerates the whole catalogue but only checks
+  the half of the output space where the previous two bugs happened to live.
+
+The lesson is not that anyone was careless. It is that a fix validated against a
+report inherits the report's blind spot, and a test written alongside such a fix
+tends to inherit it too — the test asserts the shape of the bug that was just fixed,
+not the property that was wanted. The property here is "every phrase is grammatical
+English", and nothing in the module asserts it.
+
+B1 is a one-line change. It is left undone deliberately: two integrator interventions
+on this module produced two new defects, and a third attempt against the same blind
+spot is not a good bet. What this needs is someone reading all 144 phrases once, and
+a decision on B2.
+
+---
+
 ## Cross-cutting issues found while reviewing (not module defects)
 
 **Nothing in the app makes a sound, and nothing ever has.** `SoundBank.resourceFor`
