@@ -116,7 +116,27 @@ data class Piece(
     val correctCol: Int,
     val colorIndex: Int,
     val placed: Boolean = false,
-)
+) {
+    /**
+     * Colour-independent identity. [KidPalette.Swatch] only has 7 entries
+     * and levels go up to 12 pieces, so colour alone repeats -- these two
+     * derived properties give every piece (id 0..11) a unique
+     * (shape, pipCount) combination instead, since `id` is bijective with
+     * `(id % PIECE_SHAPE_COUNT, id / PIECE_SHAPE_COUNT)`. Rendered on BOTH
+     * the piece and its slot (see PuzzleBoardGame's ShapeGlyph/PieceGlyph)
+     * so a child can match them without relying on colour at all -- this is
+     * also L5's discoverable signal once the colour tint is removed.
+     */
+    val shape: PieceShape get() = PieceShape.entries[id % PIECE_SHAPE_COUNT]
+    val pipCount: Int get() = id / PIECE_SHAPE_COUNT + 1
+}
+
+/** The four colour-independent glyph shapes a piece can carry. */
+enum class PieceShape { CIRCLE, SQUARE, TRIANGLE, DIAMOND }
+
+/** Number of distinct [PieceShape]s; pipCount covers the rest of a piece's
+ *  id so (shape, pipCount) stays a unique pair for every id up to 12. */
+const val PIECE_SHAPE_COUNT = 4
 
 /** A plain x/y point, deliberately not `androidx.compose.ui.geometry.Offset`
  *  so this file stays free of Compose/Android imports and is testable on
@@ -142,6 +162,24 @@ object PuzzleBoardGeometry {
      * accidentally tighten later.
      */
     fun toleranceDpFor(level: Int): Float = SNAP_TOLERANCE_DP
+
+    /**
+     * The tolerance actually used at drop time: [toleranceDpFor]'s constant
+     * 48dp floor (never lowered, so the guard test above stays meaningful
+     * and un-gamed), OR-ed with a fraction of the ACTUAL measured cell
+     * pitch at whatever level is currently on screen, whichever is bigger.
+     *
+     * The 48dp floor was sized for the densest grid (L4/L5, ~78dp cell
+     * pitch). At L1 a 2x2 grid on a 360dp-wide phone gives a cell pitch of
+     * roughly (360 - 2*16 board padding) / 2 ~= 164dp -- a flat 48dp radius
+     * there covers under a third of the cell a child is aiming at, so a
+     * squarely-placed, visually-correct drop can still bounce back. Scaling
+     * by the real cell pitch (floored at the old constant, never below it)
+     * fixes that everywhere generously without ever making any level's
+     * effective tolerance smaller than the 48dp floor it always had.
+     */
+    fun effectiveToleranceDpFor(level: Int, cellPitchDp: Float): Float =
+        maxOf(toleranceDpFor(level), cellPitchDp * CELL_PITCH_FRACTION)
 
     /** True if [drop] landed within [toleranceDp] of [target]. */
     fun isWithinTolerance(drop: Point, target: Point, toleranceDp: Float): Boolean {
@@ -171,9 +209,20 @@ object PuzzleBoardGeometry {
         )
     }
 
-    // A four year old's drag is wobbly. This is deliberately large -- about
-    // the size of a whole extra grid cell at L1 -- and it is the SAME value
-    // fed to every level, including L5's 12-piece grid where cells are
-    // smallest and precision would be hardest to demand.
-    private const val SNAP_TOLERANCE_DP = 72f
+    // A four year old's drag is wobbly, so this stays generous -- but it
+    // must not be so generous that aim stops mattering. At L4/L5 (12
+    // pieces, 4 columns) a typical board's cell pitch is ~78dp, so a
+    // tolerance of ~0.9 of a cell (the old 72f) meant a piece dropped
+    // squarely on the WRONG adjacent cell still snapped into its correct
+    // one. This value is instead pinned to roughly 0.6x that densest
+    // level's cell pitch, floored at 48dp, and kept the SAME constant at
+    // every level (never shrinking as levels rise, per this object's
+    // class-level contract) rather than tightening per level.
+    private const val REFERENCE_CELL_PITCH_DP = 78f
+    private const val SNAP_TOLERANCE_DP = 48f // max(48f, REFERENCE_CELL_PITCH_DP * 0.6f) == 48f
+
+    /** Fraction of the real cell pitch [effectiveToleranceDpFor] will accept
+     *  once it is bigger than the flat floor -- generous but still well
+     *  short of "any adjacent cell also counts" (which needed ~0.9). */
+    private const val CELL_PITCH_FRACTION = 0.45f
 }

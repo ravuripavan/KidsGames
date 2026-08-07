@@ -62,6 +62,40 @@ class PuzzleBoardStateTest {
     }
 
     @Test
+    fun `every piece has an identity independent of colour`() {
+        for (level in 1..5) {
+            val pieces = PuzzleBoardState(level).pieces
+            // (shape, pipCount) must be unique per piece -- if two pieces
+            // ever shared both, a child would have no colour-independent
+            // way to tell them apart.
+            val glyphKeys = pieces.map { it.shape to it.pipCount }
+            assertEquals(
+                "level $level must give every piece a unique (shape, pipCount) pair",
+                glyphKeys.size,
+                glyphKeys.toSet().size,
+            )
+        }
+
+        // Sanity check the exact scenario the review flagged: at 12 pieces
+        // there are only 7 swatch colours, so some pieces MUST share a
+        // colourIndex modulo the swatch size. Confirm those pieces still
+        // differ by shape or pipCount, not colour.
+        val swatchSize = 7
+        val level5 = PuzzleBoardState(level = 5).pieces
+        val byColour = level5.groupBy { it.colorIndex % swatchSize }
+        val colourCollisions = byColour.values.filter { it.size > 1 }
+        assertTrue("expected level 5 (12 pieces, 7 colours) to have colour collisions to test", colourCollisions.isNotEmpty())
+        colourCollisions.forEach { group ->
+            val glyphKeys = group.map { it.shape to it.pipCount }
+            assertEquals(
+                "pieces sharing a colour must still differ by shape/pipCount",
+                glyphKeys.size,
+                glyphKeys.toSet().size,
+            )
+        }
+    }
+
+    @Test
     fun `snap tolerance is constant across levels and never shrinks`() {
         val toleranceByLevel = (1..5).map { PuzzleBoardGeometry.toleranceDpFor(it) }
         for (i in 1 until toleranceByLevel.size) {
@@ -75,6 +109,39 @@ class PuzzleBoardStateTest {
         // tolerance that is constant-but-tiny would technically pass the
         // check above while still failing a wobbly 4 year old's drag.
         assertTrue(toleranceByLevel.all { it >= 48f })
+    }
+
+    @Test
+    fun `effective tolerance scales up with a level's real cell pitch but never drops below the floor`() {
+        // L1 on a 360dp phone: 2x2 grid, ~328dp of board content width, so a
+        // cell pitch of ~164dp. The flat 48dp floor alone would only cover
+        // ~29% of that cell -- effectiveToleranceDpFor must do much better.
+        val l1CellPitch = 164f
+        val l1Tolerance = PuzzleBoardGeometry.effectiveToleranceDpFor(1, l1CellPitch)
+        assertTrue(
+            "L1 tolerance ($l1Tolerance) must cover a meaningful fraction of its own " +
+                "cell pitch ($l1CellPitch), not just the L4/L5-sized floor",
+            l1Tolerance >= 0.4f * l1CellPitch,
+        )
+
+        // L4/L5's dense grid: ~78dp cell pitch, where the proportional term
+        // (0.45 * 78 ~= 35) is smaller than the floor -- the floor must win,
+        // and must be exactly the same floor every other level guarantees.
+        val denseCellPitch = 78f
+        val denseTolerance = PuzzleBoardGeometry.effectiveToleranceDpFor(4, denseCellPitch)
+        assertEquals(48f, denseTolerance, 0.01f)
+
+        // Whatever the cell pitch, the effective tolerance is never lower
+        // than the flat floor -- generosity is only ever added, never taken
+        // away relative to what levels 1-5 already guaranteed.
+        for (level in 1..5) {
+            for (cellPitch in listOf(20f, 78f, 164f, 300f)) {
+                assertTrue(
+                    PuzzleBoardGeometry.effectiveToleranceDpFor(level, cellPitch) >=
+                        PuzzleBoardGeometry.toleranceDpFor(level),
+                )
+            }
+        }
     }
 
     @Test
