@@ -40,6 +40,7 @@ import com.kidsgames.gameapi.GameModule
 import com.kidsgames.gameapi.Outcome
 import kotlinx.coroutines.delay
 import kotlin.math.PI
+import kotlin.random.Random
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -71,10 +72,16 @@ import kotlin.math.sin
  * memory the game is built on -- worse here than in popballoons, not just
  * equally bad.
  *
- * At L5 (10 pairs, 20 cards) the adaptive grid can run past one screen in
- * portrait; [LazyVerticalGrid] already scrolls, so cards keep their full
- * [MinTapTarget] size instead of shrinking below the 64dp floor to force
- * everything onto one screen.
+ * The grid's adaptive minimum cell size is [MinTapTarget] (64dp, the tap
+ * floor) with no extra margin added on top of it. On a 360x640 device,
+ * where `GameHost` hands `Play` roughly 360x496dp, that yields exactly 4
+ * columns at ~66dp per cell after the 24dp side padding and 16dp gutters --
+ * enough that even L5 (10 pairs, 20 cards = 5 rows) fits the full board
+ * inside 496dp with no scrolling. See the arithmetic in the module's final
+ * review notes: nothing about this grid may ever scroll, because a memory
+ * game IS spatial memory -- a card that requires a scroll to reach can move
+ * out of view mid-resolve-pause and defeat the very mechanic the pause
+ * exists to support.
  */
 object MemoryPairsGame : GameModule {
 
@@ -99,7 +106,13 @@ object MemoryPairsGame : GameModule {
         // result back to this `var` is what drives recomposition -- there
         // is no separate version/trigger counter to remember to bump, and
         // there must never be one.
-        var state by remember(level) { mutableStateOf(MemoryPairsState(level)) }
+        // Drawn once per level ENTRY (remember(level) re-keys only when the
+        // shell hands us a new level), then folded into the shuffle seed so
+        // every fresh play of a level deals a new layout while staying
+        // stable across recomposition -- cards never reshuffle under a
+        // finger mid-game. Same pattern as :games:countanimals.
+        val shuffleSeed = remember(level) { Random.nextInt() }
+        var state by remember(level) { mutableStateOf(MemoryPairsState(level, shuffleSeed = shuffleSeed)) }
         var celebrating by remember(level) { mutableStateOf(false) }
 
         // While two cards are face-up and unresolved, hold them visible for
@@ -134,11 +147,14 @@ object MemoryPairsGame : GameModule {
                 .background(KidPalette.Background),
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = MinTapTarget + 16.dp),
-                // Extra bottom padding keeps every card clear of the shell's
-                // bottom-left exit button (a 96x96dp zone that wins
-                // hit-testing over anything drawn beneath it).
-                contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 104.dp),
+                columns = GridCells.Adaptive(minSize = MinTapTarget),
+                // No extra bottom reserve here: GameHost already composes
+                // Play() inside a Modifier.padding(bottom = ExitZoneHeight),
+                // so the shell's exit button is structurally outside the
+                // space this grid ever receives. A local reservation on top
+                // of that would just be dead space that pushes the board
+                // toward a scroll it must never have.
+                contentPadding = PaddingValues(24.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize(),

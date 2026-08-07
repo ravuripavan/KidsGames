@@ -52,7 +52,14 @@ data class MemoryCard(
  */
 data class MemoryPairsState(
     val level: Int,
-    val cards: List<MemoryCard> = buildCards(level),
+    /** Folded into the shuffle so a fresh entry to a level deals a fresh
+     *  board. Defaults to a fixed value so unit tests -- and any caller that
+     *  doesn't care -- get a deterministic, reproducible layout; the caller
+     *  in `MemoryPairsGame` supplies a value drawn once per level entry via
+     *  `remember(level) { Random.nextInt() }` so replays differ but a single
+     *  play never reshuffles under a finger. */
+    val shuffleSeed: Int = 0,
+    val cards: List<MemoryCard> = buildCards(level, shuffleSeed),
     val flippedIds: List<Int> = emptyList(),
 ) {
 
@@ -114,10 +121,10 @@ data class MemoryPairsState(
             else -> 3
         }
 
-        private fun buildCards(level: Int): List<MemoryCard> {
+        private fun buildCards(level: Int, shuffleSeed: Int): List<MemoryCard> {
             val pairs = pairCount(level)
             val symbolIndices = (0 until pairs).flatMap { listOf(it, it) }
-                .shuffled(Random(level * 7919 + 13))
+                .shuffled(Random(level * 7919 + 13 + shuffleSeed))
             return symbolIndices.mapIndexed { index, symbolIndex ->
                 MemoryCard(id = index, symbolIndex = symbolIndex)
             }
