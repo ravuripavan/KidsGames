@@ -77,52 +77,88 @@ import kotlin.math.sin
  * equally bad.
  *
  * The column count is CHOSEN, not left to [GridCells.Adaptive]'s own
- * division: `Play` measures the real available width with
- * [BoxWithConstraints] and [computeColumns] picks the largest column count
- * whose resulting cell is still >= [MinTapTarget] (64dp) after the 24dp
- * side padding and 16dp gutters on both sides. `Adaptive` was tried first
- * and rejected -- its own division silently drops a column a few dp before
- * the width you'd expect (e.g. 351dp, not exactly 4*80=320dp), which at
- * L5 turns 4 columns into 3, turns 5 rows into 7, and reintroduces the
- * scroll this grid must never have. Picking the column count by measurement
- * means the highest column count the ACTUAL viewport supports is always
- * used, which also minimises row count and therefore total board height.
- * On a 360dp-wide device that yields 4 columns at 66dp/cell, same as
- * before. See the module's final review notes for the arithmetic at other
- * widths.
+ * division: `Play` measures the real available box with
+ * [BoxWithConstraints] and [chooseGrid] picks the column count whose
+ * resulting cell is still >= [MinTapTarget] (64dp) on BOTH the width axis
+ * AND the height axis the column choice implies (see [chooseGrid]'s KDoc).
+ * `Adaptive` was tried first and rejected -- its own division silently
+ * drops a column a few dp before the width you'd expect, which at L5 turns
+ * 4 columns into 3, turns 5 rows into 7, and reintroduces the scroll this
+ * grid must never have. A width-only [chooseGrid] predecessor was rejected
+ * for the same reason at a different axis: it let row count grow
+ * unchecked against the measured height, which is exactly what let a
+ * raised Display size scroll a real device in round-4 review (see
+ * [chooseGrid]'s KDoc for the arithmetic).
  */
-/** Content padding on each side of the grid. Not part of the tap-target
- *  floor, so unlike [GridGap] it is free to be tuned, but it is kept
- *  identical to what shipped in round 2 -- the fix here is column
- *  selection, not padding. */
-private val GridPadding = 24.dp
+/** Content padding on each side of the grid. Tuned down from round-3's
+ *  24dp in round 4 specifically to buy back the vertical headroom a raised
+ *  Display size eats into (see [chooseGrid]'s KDoc) -- 12dp per side is
+ *  still real, visible dead space around the board, just not as generous
+ *  as before. Not part of the tap-target floor, so unlike [GridGap] it
+ *  stays free to tune further if a future device needs it. */
+private val GridPadding = 12.dp
 
-/** Gap between touch nodes, both directions. Verified in prior review
- *  rounds and must not shrink. */
-private val GridGap = 16.dp
+/** Gap between touch nodes, both directions. Round-4 also trimmed this
+ *  from 16dp to 10dp for the same reason as [GridPadding] -- still a
+ *  clearly visible gap between adjacent 64dp cards, not a squeeze against
+ *  the tap-target floor itself, which this constant never touches. */
+private val GridGap = 10.dp
 
 /**
- * Picks the largest column count whose resulting cell width is still
- * `>= MinTapTarget` inside [availableWidth], given [GridPadding] on both
- * sides and [GridGap] between columns. Pure Dp arithmetic, no Compose
- * dependency beyond the `Dp` type, so it is trivial to reason about (and
- * unit-testable) independent of any real layout pass.
- *
- * Cell width for `c` columns is `(availableWidth - 2*GridPadding -
- * GridGap*(c-1)) / c`, which is monotonically decreasing in `c`, so the
- * search can stop at the first `c` that fails the floor. `cardCount` caps
- * the search -- there is never a reason to ask for more columns than there
- * are cards on the board.
+ * A chosen column/row layout for the board. [rows] is derived from
+ * [columns] and the card count (`ceil(cardCount / columns)`), never picked
+ * independently -- the grid is still a single [GridCells.Fixed] column
+ * count, [rows] just exists so callers (and tests) can assert the whole
+ * board's height without recomputing the ceiling division themselves.
  */
-private fun computeColumns(availableWidth: Dp, cardCount: Int): Int {
-    if (cardCount <= 0) return 1
-    var best = 1
+internal data class GridSpec(val columns: Int, val rows: Int)
+
+/**
+ * Picks a column count for [cardCount] cards such that BOTH axes hold: the
+ * resulting cell width (dividing [maxWidth] by the column count, after
+ * [GridPadding] on both sides and [GridGap] between columns) and the
+ * resulting cell height (dividing [maxHeight] by the row count the column
+ * choice implies, same padding/gap rule) are each `>= MinTapTarget`. Pure Dp
+ * arithmetic, no Compose dependency beyond the `Dp` type, so it is
+ * unit-testable independent of any real layout pass.
+ *
+ * This is the round-4 fix: the previous version ([computeColumns], now
+ * folded into this function) measured width alone. Picking columns from
+ * width only chooses row count as a SIDE EFFECT (`rows = ceil(cardCount /
+ * columns)`), and nothing checked that side effect against the measured
+ * height -- at a raised Display size, a device can be narrow enough to
+ * force fewer columns (more rows) while still being tall on paper, and the
+ * fixed 96dp exit-zone reservation plus safeDrawing insets eat further into
+ * that height without shrinking together with the raised density. The
+ * result was a grid that silently scrolled, which this game's own
+ * invariant (see class KDoc) forbids outright.
+ *
+ * Cell width for `c` columns is monotonically decreasing in `c`, so once it
+ * drops below the floor, no larger `c` can recover it and the search stops.
+ * Row count is non-increasing as `c` grows (more columns means the same
+ * card count spreads over fewer rows), so among the column counts whose
+ * width clears the floor, the search keeps the one that also clears the
+ * height floor and yields the fewest rows -- preferring more columns only
+ * as a tiebreaker, since fewer rows is what actually relieves the height
+ * constraint. If NO column count clears both floors, this returns `null`
+ * rather than silently degrading to a scroll -- see [Play] for how that
+ * is handled.
+ */
+internal fun chooseGrid(cardCount: Int, maxWidth: Dp, maxHeight: Dp): GridSpec? {
+    if (cardCount <= 0) return GridSpec(1, 1)
+    var best: GridSpec? = null
     for (c in 1..cardCount) {
-        val cellWidth = (availableWidth - GridPadding * 2 - GridGap * (c - 1)) / c
-        if (cellWidth >= MinTapTarget) {
-            best = c
-        } else {
-            break
+        val cellWidth = (maxWidth - GridPadding * 2 - GridGap * (c - 1)) / c
+        if (cellWidth < MinTapTarget) break
+        val rows = (cardCount + c - 1) / c
+        val cellHeight = (maxHeight - GridPadding * 2 - GridGap * (rows - 1)) / rows
+        if (cellHeight < MinTapTarget) continue
+        val current = GridSpec(c, rows)
+        best = when {
+            best == null -> current
+            rows < best.rows -> current
+            rows == best.rows && c > best.columns -> current
+            else -> best
         }
     }
     return best
@@ -192,13 +228,32 @@ object MemoryPairsGame : GameModule {
                 .background(KidPalette.Background),
         ) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                // Measure the REAL available width every recomposition and
-                // pick the column count from it, rather than trusting
-                // GridCells.Adaptive's own division (see class KDoc for why
-                // that silently regresses the scroll bug below ~352dp).
-                val columns = remember(maxWidth, state.cards.size) {
-                    computeColumns(maxWidth, state.cards.size)
+                // Measure the REAL available box every recomposition -- both
+                // axes, not width alone -- and pick the column count from
+                // it, rather than trusting GridCells.Adaptive's own division
+                // (see class KDoc for why that silently regresses the
+                // scroll bug below ~352dp) or a width-only search (see
+                // chooseGrid's KDoc for the round-4 device finding that
+                // fixed). This BoxWithConstraints already sits inside
+                // GameHost's exit-zone padding and KidsApp's safeDrawing
+                // insets, so maxWidth/maxHeight here ARE the real content
+                // box the game receives -- nothing is hand-subtracted.
+                val gridSpec = remember(maxWidth, maxHeight, state.cards.size) {
+                    chooseGrid(state.cards.size, maxWidth, maxHeight)
+                        // No column count clears the 64dp floor on both
+                        // axes at this box size. Falling back to a single
+                        // column would still scroll (worse), so fall back
+                        // to the narrowest board (most columns the width
+                        // alone allows) -- this only degrades cell size
+                        // below the 64dp floor in a box this game was never
+                        // going to fit in either way, and is a last resort,
+                        // not the expected path at any shipped level.
+                        ?: GridSpec(
+                            columns = maxOf(1, state.cards.size),
+                            rows = 1,
+                        )
                 }
+                val columns = gridSpec.columns
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
                     // No extra bottom reserve here: GameHost already composes

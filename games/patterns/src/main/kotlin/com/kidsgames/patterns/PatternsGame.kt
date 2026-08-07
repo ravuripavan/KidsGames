@@ -13,9 +13,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -178,27 +178,44 @@ object PatternsGame : GameModule {
  * disappears. [state]'s `visibleLength` only ever grows (see its KDoc), so
  * this is a pure append -- every slot the child has already seen keeps its
  * original place in the row for the rest of the level.
+ *
+ * One LazyRow item is one SLOT, not one whole repeat group. An earlier
+ * version rendered one item per group, which meant a group's rendered width
+ * grew every fill (one more slot inside the same item) while the scroll
+ * effect only fired on group-index changes -- so the blank slot, which is
+ * always the last slot in its group, drifted off the trailing edge on the
+ * two fills out of three that don't cross a group boundary. Per-slot items
+ * have a fixed width regardless of how many fills have happened, which is
+ * what makes [PatternsLayout.anchorIndexFor] a correct, purely-arithmetic
+ * scroll target -- see its KDoc for why every item trivially fits any
+ * supported viewport. The alternating tinted "box" is still drawn, just as
+ * a per-slot background rounded only at its group's first/last slot rather
+ * than as a single wide composable, so the visual grouping cue is
+ * unchanged.
  */
 @Composable
 private fun SequenceRow(state: PatternsState, wobbleTrigger: Int, modifier: Modifier = Modifier) {
     val groupSize = groupSizeFor(state)
-    val listState = rememberLazyListState()
 
-    // The blank slot is always the LAST rendered slot (visibleLength stops
-    // exactly one past it), and therefore always the last slot in its group.
-    // Scrolling that group's start to the viewport's leading edge is enough
-    // to guarantee the whole group -- blank included -- is on screen: the
-    // widest group (L3, groupSize 4) is 4*68dp + 32dp = 304dp, which plus the
-    // 20dp leading content padding is 324dp, comfortably under the narrowest
-    // portrait viewport (360dp) with margin to spare. This must run both on
-    // level entry (the blank can already be several groups in, e.g. L3 starts
-    // with an 8-slot prefix -> blank's group index is 2, not 0) and after
-    // every fill, so it is keyed on the blank's identity rather than a
-    // one-shot Unit key.
-    val blankGroupIndex = state.blankIndex?.let { it / groupSize }
-    LaunchedEffect(blankGroupIndex) {
-        if (blankGroupIndex != null) {
-            listState.animateScrollToItem(blankGroupIndex)
+    // Computed once per level (not animated) so the very first frame is
+    // already positioned correctly -- an animated jump immediately after an
+    // unscrolled first frame was what produced the "leftmost group hard
+    // clipped at x=0" symptom: the pre-jump frame rendered fine, but the
+    // very next frame snapped a non-zero index flush to the viewport start,
+    // discarding the row's own leading content padding.
+    val listState = remember(state.level) {
+        LazyListState(
+            firstVisibleItemIndex = state.blankIndex?.let { PatternsLayout.anchorIndexFor(it) } ?: 0,
+        )
+    }
+
+    // Re-runs on every fill (state.blankIndex changes every time, not just
+    // when the group index changes), which is the fix for the device
+    // finding above.
+    LaunchedEffect(state.blankIndex) {
+        val blank = state.blankIndex
+        if (blank != null) {
+            listState.animateScrollToItem(PatternsLayout.anchorIndexFor(blank))
         }
     }
 
@@ -208,12 +225,20 @@ private fun SequenceRow(state: PatternsState, wobbleTrigger: Int, modifier: Modi
         contentPadding = PaddingValues(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        items(groupCountFor(state, groupSize)) { groupIndex ->
-            SequenceGroup(
-                state = state,
-                groupIndex = groupIndex,
-                groupSize = groupSize,
-                wobbleTrigger = wobbleTrigger,
+        items(state.visibleLength) { index ->
+            val groupIndex = index / groupSize
+            val groupStart = groupIndex * groupSize
+            val groupEnd = minOf(groupStart + groupSize, state.visibleLength) - 1
+            val isBlank = index == state.blankIndex
+            SequenceSlot(
+                slotIndex = index,
+                category = if (isBlank) null else state.categoryAt(index),
+                expectedCategory = state.categoryAt(index),
+                isBlank = isBlank,
+                wobbleTrigger = if (isBlank) wobbleTrigger else 0,
+                groupTint = if (groupIndex % 2 == 0) KidPalette.Surface else KidPalette.Background,
+                isGroupStart = index == groupStart,
+                isGroupEnd = index == groupEnd,
             )
         }
     }
@@ -231,38 +256,17 @@ private fun groupSizeFor(state: PatternsState): Int {
     }
 }
 
-private fun groupCountFor(state: PatternsState, groupSize: Int): Int {
-    val slots = state.visibleLength
-    return (slots + groupSize - 1) / groupSize
-}
-
 @Composable
-private fun SequenceGroup(state: PatternsState, groupIndex: Int, groupSize: Int, wobbleTrigger: Int) {
-    val tint = if (groupIndex % 2 == 0) KidPalette.Surface else KidPalette.Background
-    Row(
-        modifier = Modifier
-            .padding(6.dp)
-            .background(tint, RoundedCornerShape(20.dp))
-            .border(2.dp, KidPalette.OnSurface.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
-            .padding(10.dp),
-    ) {
-        val start = groupIndex * groupSize
-        val end = minOf(start + groupSize, state.visibleLength)
-        (start until end).forEach { index ->
-            val isBlank = index == state.blankIndex
-            SequenceSlot(
-                slotIndex = index,
-                category = if (isBlank) null else state.categoryAt(index),
-                expectedCategory = state.categoryAt(index),
-                isBlank = isBlank,
-                wobbleTrigger = if (isBlank) wobbleTrigger else 0,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SequenceSlot(slotIndex: Int, category: Int?, expectedCategory: Int, isBlank: Boolean, wobbleTrigger: Int) {
+private fun SequenceSlot(
+    slotIndex: Int,
+    category: Int?,
+    expectedCategory: Int,
+    isBlank: Boolean,
+    wobbleTrigger: Int,
+    groupTint: Color,
+    isGroupStart: Boolean,
+    isGroupEnd: Boolean,
+) {
     // Both the animation and its "have I already reacted to this trigger
     // value" baseline are keyed to the slot's SEQUENCE identity, not the
     // slot's position in the composition. Without this, when the blank
@@ -283,8 +287,21 @@ private fun SequenceSlot(slotIndex: Int, category: Int?, expectedCategory: Int, 
         }
     }
 
+    val groupShape = RoundedCornerShape(
+        topStart = if (isGroupStart) 20.dp else 0.dp,
+        bottomStart = if (isGroupStart) 20.dp else 0.dp,
+        topEnd = if (isGroupEnd) 20.dp else 0.dp,
+        bottomEnd = if (isGroupEnd) 20.dp else 0.dp,
+    )
     Box(
         modifier = Modifier
+            .padding(
+                start = if (isGroupStart) 16.dp else 0.dp,
+                end = if (isGroupEnd) 16.dp else 0.dp,
+                top = 10.dp,
+                bottom = 10.dp,
+            )
+            .background(groupTint, groupShape)
             .padding(6.dp)
             .size(56.dp)
             .scale(if (isBlank) wobble.value else 1f),

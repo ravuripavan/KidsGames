@@ -510,6 +510,26 @@ rather than a dirty car.
 picture is a small mark floating in a large white square. `PickerScreen` passes no
 size modifier to `Image`.
 
+**`:games:memorypairs`'s fallback is unusable in a box that a real phone can reach.**
+The e2e blocker is fixed — `chooseGrid` now measures both axes and level 5 lays out
+4x5 at the configuration that was clipping. But when no column count clears the 64dp
+floor on both axes it falls back to `columns = cardCount, rows = 1`: all twenty cards
+in a single row, roughly 14dp each. The reasoning in the code is that a single column
+would scroll and be worse; a single row is worse still.
+
+The fix's author judged that box unreachable, on the grounds that it implies an
+effective width under 320dp, "below what Android guarantees". That guarantee is about
+a device's default width. A stock 360x640 phone at the largest system Display size
+lands at roughly 277dp wide, which is the failing box — so the fallback is reachable
+on an ordinary phone with an accessibility setting a parent might well have on.
+
+Underneath it is the same decision that parked four other modules: at some box size,
+twenty cards cannot coexist with a 64dp touch floor, and something must give. Fewer
+pairs at level 5 on a small box, a smaller floor, or an explicit "this level needs a
+bigger screen" state are all defensible; a 14dp card is not. Left as-is because
+choosing is a product call, and because the shipped path at every configuration the
+device pass actually exercised is correct.
+
 **Note on e2e coverage, so nobody reads more into it than is there.** Only
 `:games:popballoons` was played through all five levels by hand. For the other six,
 level 1 was played, the store was confirmed to advance, and the progress file was
