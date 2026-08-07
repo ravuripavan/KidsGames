@@ -37,6 +37,9 @@ dependencies {
     implementation(project(":core:designkit"))
     implementation(project(":core:shell"))
 
+    // Games. The remaining thirteen are added in Phase 3, once built.
+    implementation(project(":games:popballoons"))
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)

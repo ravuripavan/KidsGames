@@ -1,15 +1,18 @@
 package com.kidsgames.app
 
 import com.kidsgames.gameapi.GameModule
+import com.kidsgames.popballoons.PopBalloonsGame
 
 /**
- * The assembled list of every game the shell knows about. Populated in Phase 3
- * as each `:games:*` module lands; kept empty here rather than referencing a
- * module that isn't built yet.
+ * The assembled list of every game the shell knows about. This is the only file
+ * that knows every game exists; the games themselves know nothing of each other.
  *
- * TODO(popballoons): register com.kidsgames.popballoons.PopBalloonsGame once
- * `:games:popballoons` compiles (built concurrently by another worker).
+ * The remaining thirteen modules are registered in Phase 3, after they are built
+ * concurrently — keeping this file off the concurrent write path is what lets
+ * those builds run without conflicting.
  */
 object AppGames {
-    val all: List<GameModule> = emptyList()
+    val all: List<GameModule> = listOf(
+        PopBalloonsGame,
+    )
 }
