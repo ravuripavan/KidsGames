@@ -264,6 +264,41 @@ class MatchShapesStateTest {
     }
 
     @Test
+    fun `a drop succeeds for every kind and rotation pair that renders identically`() {
+        // Enumerate ShapeKind x required-rotation x current-rotation, not just
+        // the two kinds named in the bug report. A shape whose current
+        // rotation RENDERS IDENTICALLY to the required rotation (per the
+        // shape's own rotational symmetry) must always be accepted, even
+        // when the two angle numbers differ -- e.g. a 180-symmetric shape's
+        // 90 and 270 look the same and must both satisfy either requirement.
+        val rotations = listOf(0, 90, 180, 270)
+        for (kind in ShapeKind.entries) {
+            for (required in rotations) {
+                for (current in rotations) {
+                    val looksTheSame = MatchShapesState.rendersIdentically(kind, current, required)
+                    val shape = ShapeItem(id = 1, kind = kind, requiredRotation = required, currentRotation = current)
+                    val hole = HoleItem(id = 1, kind = kind, requiredRotation = required)
+                    val s = MatchShapesState(level = 4, shapes = listOf(shape), holes = listOf(hole))
+                    val next = s.drop(shapeId = 1, holeId = 1)
+                    if (looksTheSame) {
+                        assertTrue(
+                            "kind=$kind required=$required current=$current render identically " +
+                                "so the drop must succeed",
+                            next.shapes.first().matched,
+                        )
+                    } else {
+                        assertFalse(
+                            "kind=$kind required=$required current=$current render differently " +
+                                "so the drop must be rejected",
+                            next.shapes.first().matched,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun `level four requires at least as much work as level three`() {
         fun requiredWork(level: Int): Int {
             val s = MatchShapesState(level)

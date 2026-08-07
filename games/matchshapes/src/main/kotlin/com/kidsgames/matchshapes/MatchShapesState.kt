@@ -93,7 +93,7 @@ data class MatchShapesState(
         if (shape.matched) return this
         val hole = holes.find { it.id == holeId } ?: return this
         if (hole.kind != shape.kind) return this
-        if (shape.currentRotation != shape.requiredRotation) return this
+        if (!rendersIdentically(shape.kind, shape.currentRotation, shape.requiredRotation)) return this
 
         return copy(shapes = shapes.map { if (it.id == shapeId) it.copy(matched = true) else it })
     }
@@ -162,6 +162,34 @@ data class MatchShapesState(
 
         /** Whether rotating [kind] ever changes how it looks on screen. */
         fun hasVisibleRotation(kind: ShapeKind): Boolean = visibleRotations(kind).isNotEmpty()
+
+        /**
+         * The rotational period, in degrees, at which [kind] repeats its
+         * on-screen appearance. CIRCLE/SQUARE/DIAMOND/CROSS have 4-fold
+         * symmetry so every 90-degree step looks the same (period 90).
+         * HEXAGON/RECTANGLE/OVAL have 180-degree symmetry (period 180): 0
+         * looks like 180, and -- the bug this fixes -- 90 looks EXACTLY
+         * like 270. TRIANGLE/STAR/PENTAGON have no rotational symmetry at
+         * any 90-degree step, so nothing repeats before a full turn
+         * (period 360).
+         */
+        private fun visualPeriod(kind: ShapeKind): Int = when (kind) {
+            ShapeKind.CIRCLE, ShapeKind.SQUARE, ShapeKind.DIAMOND, ShapeKind.CROSS -> 90
+            ShapeKind.HEXAGON, ShapeKind.RECTANGLE, ShapeKind.OVAL -> 180
+            ShapeKind.TRIANGLE, ShapeKind.STAR, ShapeKind.PENTAGON -> 360
+        }
+
+        /**
+         * True when rotation [a] and rotation [b] render as the identical
+         * image for [kind]. This -- not raw equality of the two angles --
+         * is the rule [drop] must use: a child who has turned a piece to
+         * an orientation that LOOKS like the hole must never see the drop
+         * rejected just because the underlying angle number differs.
+         */
+        internal fun rendersIdentically(kind: ShapeKind, a: Int, b: Int): Boolean {
+            val period = visualPeriod(kind)
+            return ((a - b) % period + period) % period == 0
+        }
 
         /**
          * Fixed, deterministic pick of a visible rotation for [kind], cycled

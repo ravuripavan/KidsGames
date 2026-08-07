@@ -454,6 +454,68 @@ a decision on B2.
 
 ---
 
+## Found by the emulator e2e pass, after every module had cleared review
+
+The e2e sweep ran the seven registered games on a real device at zero volume, at
+default density and at raised Display sizes. It found three defects that fourteen
+rounds of code review had missed, plus several shell-level gaps. The three game
+defects are being fixed. What follows is what needs a decision or belongs to the
+shell.
+
+**Two spec features were never built into the picker.** The design doc says: "The
+picker shows the highest level reached, and a press-and-hold on a game reveals the
+unlocked levels as one to five dots so a child can drop back down without an adult."
+Neither exists — there is no level indicator anywhere in `PickerScreen` and no
+long-press handler.
+
+The consequence is a direct contradiction of the spec's own progression rule. "All
+unlocked levels stay playable" and "a child who prefers level 1 may replay it
+indefinitely" are both false today: once a child reaches level 5 they cannot get
+back to level 1 without an adult clearing app data. This is the largest gap between
+the shipped app and the design.
+
+**System back from the picker exits the app, bypassing the parental gate.** The gate
+itself works — it resisted 25 rapid taps and needed a genuine 3.6 second hold. But
+back-from-picker quitting to the launcher is wired in `KidsApp`, so a child who
+discovers the back gesture leaves in one swipe. Whether that is acceptable is a
+product call: the gate exists so a child does not accidentally leave mid-journey, and
+right now the most common accidental gesture on Android bypasses it entirely.
+
+**No `android:configChanges`**, so changing the system Display size recreates the
+Activity and drops in-progress level state back to the start. Minor, but worth
+knowing before someone tests accessibility settings and reports lost progress.
+
+**`:games:popballoons` draws its target swatch on top of the balloons.** The
+`TargetColorSwatch` is a `Box`-aligned overlay at `TopCenter` with no reserved
+space, so it lands on row-1 balloons. It is a 56dp coloured circle with a white ring
+— visually a balloon. It does not consume touch, so the balloons under it still
+work, but a child sees an eighth balloon wedged between two others that cannot be
+popped. This is the same overlay-on-content pattern the shell deliberately removed
+for the exit button and the parental gate by reserving strips; the game never got the
+same treatment.
+
+**`:games:carwash` runs out of game before it runs out of timer.** At level 1 the car
+is fully clean after roughly 60 seconds, and the sandbox timer runs 180. There is no
+shine, no progress signal, and nothing to do for the remaining two minutes.
+`:games:carrace` has the same shape: 132 seconds per level with no progress
+indicator of any kind. Between them that is over five minutes of blank waiting per
+car game per level.
+
+**`:games:carwash` spreads its dirt over the whole screen.** The dirt grid maps
+across the entire canvas width rather than the car's bounding region, so blobs are
+clipped at both edges and float well outside the body. It reads as a dirty screen
+rather than a dirty car.
+
+**Picker tile icons render at their intrinsic ~24dp inside a ~98dp tile**, so each
+picture is a small mark floating in a large white square. `PickerScreen` passes no
+size modifier to `Image`.
+
+**Note on e2e coverage, so nobody reads more into it than is there.** Only
+`:games:popballoons` was played through all five levels by hand. For the other six,
+level 1 was played, the store was confirmed to advance, and the progress file was
+then seeded to level 5 — which was played to a real completion. **Levels 2 to 4 of
+six games have never been exercised on a device.**
+
 ## Cross-cutting issues found while reviewing (not module defects)
 
 **Nothing in the app makes a sound, and nothing ever has.** `SoundBank.resourceFor`
