@@ -1,7 +1,8 @@
 package com.kidsgames.designkit
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.defaultMinSize
@@ -39,13 +40,23 @@ val MinTapTarget = 64.dp
  * visual layer) will not resolve to the outer, real-touch-target node. Use
  * the [testTag] parameter to tag the outer node directly when a test needs
  * to assert on the actual tap target.
+ *
+ * [onLongClick], when supplied, fires on a press-and-hold instead of adding a
+ * second independent gesture detector: it is wired through
+ * [androidx.compose.foundation.combinedClickable] on the very same outer
+ * node, so a long press can never be interpreted as a tap-then-something-else
+ * or fight the tap gesture for the pointer. Left `null` (the default) this
+ * behaves exactly as a plain tap target, unchanged from every existing call
+ * site.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun KidButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     layoutModifier: Modifier = Modifier,
     testTag: String? = null,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -61,9 +72,10 @@ fun KidButton(
         modifier = layoutModifier
             .defaultMinSize(minWidth = MinTapTarget, minHeight = MinTapTarget)
             .background(KidPalette.Surface, RoundedCornerShape(16.dp))
-            .clickable(
+            .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
+                onLongClick = onLongClick,
                 onClick = onClick,
             )
             .let { if (testTag != null) it.testTag(testTag) else it },

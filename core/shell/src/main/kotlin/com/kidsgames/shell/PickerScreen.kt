@@ -4,6 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -22,7 +25,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.kidsgames.designkit.KidButton
@@ -60,6 +65,15 @@ import kotlinx.coroutines.delay
 private val PICKER_TILE_MIN_SIZE = 80.dp
 
 /**
+ * How large a game's icon is drawn inside its tile. Explicit rather than left
+ * to the drawable's intrinsic size: the e2e pass found icons rendering at
+ * their intrinsic ~24dp inside a ~98dp tile, so each picture was a small mark
+ * floating in a large white square. Sized here so the icon fills the tile and
+ * still leaves room beneath it for [LevelDots].
+ */
+private val PICKER_ICON_SIZE = 44.dp
+
+/**
  * How long the picker sits idle before it nudges once toward the suggested
  * game. "Nudge gently and once" — this is the threshold, and [PickerScreen]
  * only ever shows the nudge a single time per idle stretch: it is set up
@@ -86,10 +100,18 @@ fun PickerScreen(
     onGameSelected: (GameModule) -> Unit,
     suggestedGameId: String? = null,
     onExitApp: () -> Unit = {},
+    highestLevels: Map<String, Int> = emptyMap(),
+    onLevelSelected: (GameModule, Int) -> Unit = { game, _ -> onGameSelected(game) },
     modifier: Modifier = Modifier,
 ) {
     var nudgeVisible by remember(suggestedGameId) { mutableStateOf(false) }
     var alreadyNudged by remember(suggestedGameId) { mutableStateOf(false) }
+
+    // Which tile, if any, is currently showing its level chooser. Held here
+    // rather than per-tile so only one can ever be open, and cleared by id
+    // so a registry change cannot leave a chooser open for a game that is
+    // no longer on screen.
+    var chooserGameId by remember(registry.games) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(suggestedGameId) {
         if (suggestedGameId == null) return@LaunchedEffect
@@ -105,7 +127,8 @@ fun PickerScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(KidPalette.Background)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(KidPalette.Background)) {
         Row(
             modifier = Modifier.fillMaxWidth().height(GateStripHeight),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
@@ -128,6 +151,7 @@ fun PickerScreen(
         ) {
             items(registry.games) { game ->
                 val isSuggested = nudgeVisible && game.id == suggestedGameId
+                val highestLevel = highestLevels[game.id] ?: 1
                 KidButton(
                     onClick = { onGameSelected(game) },
                     modifier = if (isSuggested) {
@@ -137,14 +161,61 @@ fun PickerScreen(
                     } else {
                         Modifier.padding(8.dp)
                     },
+                    // A long press opens the level chooser. This goes
+                    // through KidButton's own combinedClickable rather than a
+                    // second pointerInput, so tap and hold share one gesture
+                    // detector and cannot compete for the pointer stream --
+                    // the failure that swallowed an entire first stroke in
+                    // games/tracelines.
+                    onLongClick = if (highestLevel > 1) {
+                        { chooserGameId = game.id }
+                    } else {
+                        null
+                    },
                     layoutModifier = Modifier.aspectRatio(1f),
                     testTag = "game_tile_${game.id}",
                 ) {
-                    Image(
-                        painter = painterResource(id = game.icon),
-                        contentDescription = null,
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Image(
+                            painter = painterResource(id = game.icon),
+                            contentDescription = null,
+                            modifier = Modifier.size(PICKER_ICON_SIZE),
+                        )
+                        // The highest level reached, as dots. Drawn, never
+                        // written, so a pre-reader can read it.
+                        LevelDots(
+                            highestLevel = highestLevel,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
+            }
+        }
+    }
+
+        // The chooser sits above the whole picker rather than inside the
+        // grid, so its scrim covers everything and a tap anywhere outside
+        // the panel dismisses it. A child who holds a tile by accident is
+        // never trapped.
+        val chosenId = chooserGameId
+        if (chosenId != null) {
+            val game = registry.games.firstOrNull { it.id == chosenId }
+            if (game != null) {
+                LevelChooserOverlay(
+                    game = game,
+                    highestLevel = highestLevels[game.id] ?: 1,
+                    onLevelChosen = { chosen, level ->
+                        chooserGameId = null
+                        onLevelSelected(chosen, level)
+                    },
+                    onDismiss = { chooserGameId = null },
+                )
+            } else {
+                // The game left the registry while its chooser was open.
+                chooserGameId = null
             }
         }
     }

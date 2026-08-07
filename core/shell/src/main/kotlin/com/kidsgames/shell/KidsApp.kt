@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,16 +55,34 @@ fun KidsApp(registry: GameRegistry, progressStore: ProgressStore, onExitApp: () 
         val suggestedGame = remember(registry.games, sessionState) {
             SessionOrchestrator.suggestNext(registry.games, sessionState)
         }
+        // The picker needs every game's highest level to draw its dots and
+        // to know which levels a press-and-hold may offer. Read once when
+        // the picker appears, and again whenever a game finishes, since
+        // that is the only thing that can raise a level.
+        var highestLevels by remember { mutableStateOf(emptyMap<String, Int>()) }
+        LaunchedEffect(registry.games, sessionState) {
+            highestLevels = registry.games.associate { it.id to progressStore.levelFor(it.id) }
+        }
+
         PickerScreen(
             registry = registry,
             suggestedGameId = suggestedGame?.id,
             onExitApp = onExitApp,
+            highestLevels = highestLevels,
             onGameSelected = { selected ->
                 scope.launch {
                     activeLevel = progressStore.levelFor(selected.id)
                     activeGame = selected
                     sessionState = sessionState.copy(lastPlayedId = selected.id)
                 }
+            },
+            // A level chosen by press-and-hold is played as chosen. The
+            // spec promises every unlocked level stays playable, and a tap
+            // alone could only ever reach the highest one.
+            onLevelSelected = { selected, level ->
+                activeLevel = level
+                activeGame = selected
+                sessionState = sessionState.copy(lastPlayedId = selected.id)
             },
             modifier = safeAreaModifier,
         )
