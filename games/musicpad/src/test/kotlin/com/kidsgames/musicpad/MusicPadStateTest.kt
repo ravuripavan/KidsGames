@@ -143,13 +143,30 @@ class MusicPadStateTest {
     }
 
     @Test
-    fun `starting a new recording discards the previous one without any warning or failure`() {
+    fun `starting a new recording discards the previous one once the first new tap lands`() {
         var s = MusicPadState.initial(5)
         s = s.startRecording(atMillis = 0L).tapPad(0, atMillis = 0L).stopRecording()
         assertEquals(1, s.recordedEvents.size)
 
         s = s.startRecording(atMillis = 5000L)
-        assertTrue(s.recordedEvents.isEmpty())
+        // The old recording is not erased by pressing record alone -- an
+        // accidental press is fully recoverable until a new tap arrives.
+        assertEquals(1, s.recordedEvents.size)
+
+        s = s.tapPad(3, atMillis = 5000L)
+        assertEquals(1, s.recordedEvents.size)
+        assertEquals(3, s.recordedEvents.single().padId)
+    }
+
+    @Test
+    fun `pressing record by accident and stopping without tapping leaves the old recording intact`() {
+        var s = MusicPadState.initial(5)
+        s = s.startRecording(atMillis = 0L).tapPad(1, atMillis = 0L).stopRecording()
+        assertEquals(1, s.recordedEvents.size)
+
+        s = s.startRecording(atMillis = 9000L).stopRecording()
+        assertEquals(1, s.recordedEvents.size)
+        assertEquals(1, s.recordedEvents.single().padId)
     }
 
     @Test
@@ -161,11 +178,98 @@ class MusicPadStateTest {
     }
 
     @Test
+    fun `replay switches the displayed instrument to follow each recorded event`() {
+        var s = MusicPadState.initial(5)
+        s = s.startRecording(atMillis = 0L)
+        s = s.selectInstrument(1)
+        s = s.tapPad(0, atMillis = 0L)
+        s = s.selectInstrument(0)
+        s = s.tapPad(2, atMillis = 500L)
+        s = s.stopRecording()
+        assertEquals(listOf(1, 0), s.recordedEvents.map { it.instrumentIndex })
+
+        // The child leaves a different instrument selected before pressing play.
+        s = s.selectInstrument(0)
+        s = s.startReplay()
+        var replayed = MusicPadState.initial(5)
+        for (event in s.recordedEvents) {
+            replayed = replayed.replayTap(event)
+            // Each event must make its own instrument the displayed one, so a
+            // mixed-instrument tune is never invisible on the pad it belongs to.
+            assertEquals(event.instrumentIndex, replayed.selectedInstrument)
+            assertEquals(1, replayed.tapTriggers[event.instrumentIndex to event.padId])
+        }
+    }
+
+    @Test
+    fun `sub-second gaps between taps are preserved for replay, not rounded to a whole second`() {
+        var s = MusicPadState.initial(5)
+        s = s.startRecording(atMillis = 10_000L)
+        s = s.tapPad(0, atMillis = 10_120L)
+        s = s.tapPad(1, atMillis = 10_460L)
+        s = s.tapPad(2, atMillis = 10_490L)
+        s = s.stopRecording()
+
+        assertEquals(listOf(120L, 460L, 490L), s.recordedEvents.map { it.elapsedMillis })
+        // Two taps 30ms apart must stay 30ms apart, not collapse to 0 or round to 1000ms.
+        val gap = s.recordedEvents[2].elapsedMillis - s.recordedEvents[1].elapsedMillis
+        assertEquals(30L, gap)
+    }
+
+    @Test
     fun `recording and replay are unavailable below level five and never crash when called anyway`() {
         var s = MusicPadState.initial(4)
         s = s.startRecording(atMillis = 0L)
         assertFalse(s.isRecording)
         s = s.startReplay()
         assertFalse(s.isReplaying)
+    }
+
+    @Test
+    fun `stopping replay restores the instrument that was selected before playback began`() {
+        var s = MusicPadState.initial(5)
+        s = s.startRecording(atMillis = 0L)
+        s = s.selectInstrument(1)
+        s = s.tapPad(0, atMillis = 0L)
+        s = s.stopRecording()
+
+        // The child leaves instrument 0 selected, then presses play; replay
+        // switches the badge to instrument 1 to follow the recorded tap.
+        s = s.selectInstrument(0)
+        s = s.startReplay()
+        s = s.replayTap(s.recordedEvents.single())
+        assertEquals(1, s.selectedInstrument)
+
+        // Ending replay -- whether the recording ran out or the child
+        // stopped it early -- must leave the child back on instrument 0,
+        // not wherever the last replayed tap happened to leave the badge.
+        s = s.stopReplay()
+        assertEquals(0, s.selectedInstrument)
+        assertFalse(s.isReplaying)
+    }
+
+    @Test
+    fun `replay can be stopped mid-playback, not only once every event has played`() {
+        var s = MusicPadState.initial(5)
+        s = s.startRecording(atMillis = 0L)
+        s = s.tapPad(0, atMillis = 0L)
+        s = s.tapPad(1, atMillis = 90_000L)
+        s = s.stopRecording()
+
+        s = s.startReplay()
+        assertTrue(s.isReplaying)
+        s = s.replayTap(s.recordedEvents.first())
+
+        // Stopping now -- long before the second (90s later) event -- must
+        // succeed immediately; nothing here ever waits out the full tune.
+        s = s.stopReplay()
+        assertFalse(s.isReplaying)
+    }
+
+    @Test
+    fun `stopReplay is a harmless no-op when nothing is replaying`() {
+        val s = MusicPadState.initial(5)
+        val result = s.stopReplay()
+        assertEquals(s, result)
     }
 }

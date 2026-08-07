@@ -178,6 +178,77 @@ level 5" is not evidence that the mode works.
 
 ---
 
+## `:games:musicpad` — parked 2026-08-07
+
+Three review rounds, three fix rounds. Builds green, 26 tests pass, and levels 1 to
+4 are correct at every device configuration checked. Level 5 is not.
+
+**What works, and it is nearly everything.** Replay follows the recorded instrument
+and reproduces the child's actual rhythm, because taps are stamped from
+`SystemClock.elapsedRealtime()` and the replay loop waits the real gaps. An
+accidental press of record no longer erases the previous tune until the first new
+tap lands. Replay can be stopped, restores the instrument the child was on, and
+caps any single gap so a long pause cannot lock the grid. Completion fires and
+cannot fire with the screen off. No text, no microphone, no permissions, no
+network; `TapEvent` stores only which pad, which instrument, and when — recording a
+tune never captures audio. Literal per-level counts, bounded tests,
+`rememberSoundBank()`, and a `padResId` KDoc that states honestly that note audio
+is unwired rather than claiming it will self-heal.
+
+**Why it is parked — the test certifies against a box the game never receives.**
+
+Round 3 did the right thing structurally: it extracted the layout decision into a
+pure `chooseColumns(count, maxColumns, maxWidth, maxHeight)` checking both axes,
+and added `MusicPadGameLayoutTest` to run that exact function against four device
+configurations. The composable is correct — it owns a real `BoxWithConstraints`,
+passes the measured constraints straight in, honours the returned column count, and
+the weighted rows split exactly the height that was measured.
+
+The test's model of available space is what is wrong. `contentSize()` subtracts the
+96dp exit zone and the module's 12dp padding, and nothing else. But `KidsApp`
+applies `WindowInsets.safeDrawing` ABOVE `GameHost`, so the height reaching the game
+is already short by the status bar plus the navigation bar — the repo's own estimate,
+written in `PickerScreen`, is about 80dp.
+
+With that included, level 5 at a 1.3x Display size lays out pads of 72.3 x **42.8dp**
+against a 64dp floor, via a `bestByWidthOnly` fallback branch that no test has ever
+executed. Level 5 at 1.15x clears the floor by 0.2dp. The break-even is roughly 16dp
+of inset, which is less than a status bar on its own.
+
+What a child gets at a raised Display size: level 5's eight pads are a 3-4mm strip
+against a 7-10mm finger, 12dp apart, so aiming at one pad routinely fires its
+neighbour — and record-and-replay, the whole point of the level, echoes a tune they
+did not play.
+
+**The lesson worth keeping.** Extracting layout into a pure function genuinely does
+make a spatial property testable, and it is the best answer this project found to
+its dominant defect class. But the test is only as good as its model of the
+available space, and here the model omitted a reduction the shell applies two layers
+up. A layout test should derive its content box from the same chain the runtime
+uses, not from a hand-written subtraction.
+
+**Why this needs a decision rather than a fourth round.** The mechanical part is
+small — subtract a `safeDrawing` allowance in `contentSize()`, watch level 5 fail at
+1.3x and 1.15x. What comes after is a content question: on a short screen, level 5
+has to give something up. Six pads instead of eight, a scrolling grid (which this
+project has rejected elsewhere), or control rows that share a single row. That is
+the same shape of decision as `:games:colorsort`'s level 5, and it is not the
+implementer's to make.
+
+**Separately, and independent of the above.** This is a music toy that makes no
+sound, and its silence is worse than the repo-wide gap: `padResId` returns integers
+in 1000-1107, which can never be Android resource ids, so wiring `resourceFor` alone
+would not help. A human must write an `R.raw.*` lookup and record the notes.
+
+Today the visuals carry it — eight distinct shapes, a bounce and a rising fading
+trace per tap, and a rhythm echo that genuinely reads as the child's own timing.
+That is charming for a minute or two. The honest ceiling is about three minutes
+against the spec's five, and the module's own timer agrees at 180 seconds. The
+level-4 "second instrument" is meaningless without audio: it changes a badge and
+draws a ring, and a child cannot discover why they would want it.
+
+---
+
 ## Cross-cutting issues found while reviewing (not module defects)
 
 **Nothing in the app makes a sound, and nothing ever has.** `SoundBank.resourceFor`

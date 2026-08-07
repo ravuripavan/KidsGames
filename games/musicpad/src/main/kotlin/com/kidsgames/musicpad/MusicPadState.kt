@@ -55,6 +55,23 @@ data class MusicPadState(
     val isReplaying: Boolean = false,
     val recordingStartMillis: Long = 0L,
     val recordedEvents: List<TapEvent> = emptyList(),
+    /**
+     * True right after [startRecording] until the first tap of the new
+     * recording arrives. While true, [recordedEvents] still holds the
+     * PREVIOUS recording untouched -- an accidental press of record is
+     * completely recoverable, because nothing is erased until the child
+     * actually starts playing a new tune. The old recording is only
+     * discarded by the first [tapPad] call made while this is true.
+     */
+    val pendingRecordingClear: Boolean = false,
+    /**
+     * [selectedInstrument] captured the instant [startReplay] was called, so
+     * [stopReplay] can put the child back on the instrument they had chosen
+     * before pressing play -- a mixed-instrument tune still ends with the
+     * child exactly where they left off, not wherever the last replayed tap
+     * happened to leave the badge.
+     */
+    val preReplayInstrument: Int? = null,
 ) {
 
     /**
@@ -62,24 +79,40 @@ data class MusicPadState(
      * always animates, and -- if a recording is in progress -- is appended
      * to [recordedEvents]. [atMillis] is an absolute clock reading supplied
      * by the caller; the elapsed offset stored on the event is derived from
-     * [recordingStartMillis].
+     * [recordingStartMillis]. Callers should supply a real monotonic clock
+     * reading (not a coarse, once-a-second counter) so that taps made
+     * fractions of a second apart -- entirely normal for a young child --
+     * are recorded with the gaps they actually had, not rounded together.
      */
     fun tapPad(padId: Int, atMillis: Long = 0L): MusicPadState {
         if (padId !in 0 until padCount) return this
         val instrument = selectedInstrument
         val key = instrument to padId
         val event = TapEvent(padId = padId, instrumentIndex = instrument, elapsedMillis = (atMillis - recordingStartMillis).coerceAtLeast(0L))
+        val newRecordedEvents = when {
+            !isRecording -> recordedEvents
+            pendingRecordingClear -> listOf(event)
+            else -> recordedEvents + event
+        }
         return copy(
             tapTriggers = tapTriggers + (key to ((tapTriggers[key] ?: 0) + 1)),
             lastTap = event,
-            recordedEvents = if (isRecording) recordedEvents + event else recordedEvents,
+            recordedEvents = newRecordedEvents,
+            pendingRecordingClear = if (isRecording) false else pendingRecordingClear,
         )
     }
 
-    /** Replays a previously recorded tap: sounds the pad without appending it to any recording. */
+    /**
+     * Replays a previously recorded tap: sounds the pad without appending it
+     * to any recording. [selectedInstrument] is switched to the event's
+     * instrument so the child sees the same instrument that made the sound
+     * during recording, even if they left a different instrument selected
+     * before pressing play.
+     */
     fun replayTap(event: TapEvent): MusicPadState {
         val key = event.instrumentIndex to event.padId
         return copy(
+            selectedInstrument = event.instrumentIndex,
             tapTriggers = tapTriggers + (key to ((tapTriggers[key] ?: 0) + 1)),
             lastTap = event,
         )
@@ -103,7 +136,7 @@ data class MusicPadState(
             isRecording = true,
             isReplaying = false,
             recordingStartMillis = atMillis,
-            recordedEvents = emptyList(),
+            pendingRecordingClear = true,
         )
     }
 
@@ -116,10 +149,20 @@ data class MusicPadState(
      */
     fun startReplay(): MusicPadState {
         if (!recordingSupported) return this
-        return copy(isReplaying = true, isRecording = false)
+        return copy(isReplaying = true, isRecording = false, preReplayInstrument = selectedInstrument)
     }
 
-    fun stopReplay(): MusicPadState = if (isReplaying) copy(isReplaying = false) else this
+    /**
+     * Ends replay -- whether because every recorded tap finished playing or
+     * because the child pressed the replay button again mid-playback -- and
+     * restores whichever instrument was selected before [startReplay] was
+     * called.
+     */
+    fun stopReplay(): MusicPadState = if (isReplaying) {
+        copy(isReplaying = false, selectedInstrument = preReplayInstrument ?: selectedInstrument, preReplayInstrument = null)
+    } else {
+        this
+    }
 
     companion object {
         fun padCountFor(level: Int): Int = when {
