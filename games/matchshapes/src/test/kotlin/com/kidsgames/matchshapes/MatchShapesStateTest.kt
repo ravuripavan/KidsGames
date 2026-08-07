@@ -52,13 +52,48 @@ class MatchShapesStateTest {
     }
 
     @Test
-    fun `levels four and five require rotation on every shape`() {
+    fun `levels four and five require rotation only on shapes where rotation is visible`() {
         for (level in 4..5) {
             val s = MatchShapesState(level)
-            assertTrue(
-                "level $level should require rotation on every shape",
-                s.shapes.all { it.requiredRotation != 0 },
-            )
+            for (shape in s.shapes) {
+                if (MatchShapesState.hasVisibleRotation(shape.kind)) {
+                    assertTrue(
+                        "level $level shape ${shape.kind} has a visible rotation " +
+                            "so it should require one",
+                        shape.requiredRotation != 0,
+                    )
+                } else {
+                    assertEquals(
+                        "level $level shape ${shape.kind} has NO visible rotation " +
+                            "(it looks identical at every 90-degree step), so requiring " +
+                            "one would be an invisible, undiscoverable puzzle",
+                        0,
+                        shape.requiredRotation,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `required rotation is never assigned to a rotationally symmetric shape`() {
+        // CIRCLE, SQUARE, DIAMOND and CROSS are pixel-identical at every
+        // 90-degree step -- the exact defect that made the reference game's
+        // rotation puzzle undiscoverable. No level may ever require rotating
+        // one of these.
+        val symmetric = setOf(ShapeKind.CIRCLE, ShapeKind.SQUARE, ShapeKind.DIAMOND, ShapeKind.CROSS)
+        for (level in 1..5) {
+            val s = MatchShapesState(level)
+            for (shape in s.shapes) {
+                if (shape.kind in symmetric) {
+                    assertEquals(
+                        "level $level: ${shape.kind} is rotationally symmetric and must " +
+                            "never require rotation",
+                        0,
+                        shape.requiredRotation,
+                    )
+                }
+            }
         }
     }
 
@@ -105,7 +140,7 @@ class MatchShapesStateTest {
     @Test
     fun `at level four dropping into the correct hole without rotating fails`() {
         val s = MatchShapesState(level = 4)
-        val shape = s.shapes.first()
+        val shape = s.shapes.first { it.requiredRotation != 0 }
         val hole = s.holes.first { it.kind == shape.kind }
         val next = s.drop(shape.id, hole.id)
         assertFalse(
@@ -117,7 +152,7 @@ class MatchShapesStateTest {
     @Test
     fun `rotate advances current rotation by ninety degrees and wraps at 360`() {
         val s = MatchShapesState(level = 4)
-        val shape = s.shapes.first()
+        val shape = s.shapes.first { it.requiredRotation != 0 }
         var current = s
         repeat(4) { current = current.rotate(shape.id) }
         assertEquals(0, current.shapes.first { it.id == shape.id }.currentRotation)
@@ -134,7 +169,7 @@ class MatchShapesStateTest {
     @Test
     fun `rotating to the required rotation then dropping matches the shape`() {
         val s = MatchShapesState(level = 4)
-        val shape = s.shapes.first()
+        val shape = s.shapes.first { it.requiredRotation != 0 }
         val steps = shape.requiredRotation / 90
         var current = s
         repeat(steps) { current = current.rotate(shape.id) }
@@ -208,6 +243,23 @@ class MatchShapesStateTest {
                     "to level ${i + 1} (${workByLevel[i]})",
                 workByLevel[i] >= workByLevel[i - 1],
             )
+        }
+    }
+
+    @Test
+    fun `a hole's drawn rotation always equals the required rotation of its matching shape`() {
+        for (level in 1..5) {
+            val s = MatchShapesState(level)
+            for (hole in s.holes) {
+                val matchingShape = s.shapes.first { it.kind == hole.kind }
+                assertEquals(
+                    "level $level: hole for ${hole.kind} must be drawn at the same " +
+                        "rotation the matching shape is required to reach, so turning the " +
+                        "shape until it matches the hole is the correct strategy",
+                    matchingShape.requiredRotation,
+                    hole.requiredRotation,
+                )
+            }
         }
     }
 

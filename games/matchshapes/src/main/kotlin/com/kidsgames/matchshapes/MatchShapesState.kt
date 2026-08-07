@@ -31,10 +31,18 @@ data class ShapeItem(
     val matched: Boolean = false,
 )
 
-/** One hole on the board. A shape fits a hole only when [kind] matches. */
+/**
+ * One hole on the board. A shape fits a hole only when [kind] matches AND,
+ * at L4/L5, the shape's [ShapeItem.currentRotation] equals
+ * [requiredRotation]. The hole is always DRAWN at [requiredRotation] (see
+ * `HoleView`) so the hole itself shows the target orientation -- "turn the
+ * shape until it looks like the hole" is the correct and sufficient
+ * strategy, never a trap where the visually-matching orientation is wrong.
+ */
 data class HoleItem(
     val id: Int,
     val kind: ShapeKind,
+    val requiredRotation: Int = 0,
 )
 
 /**
@@ -66,7 +74,7 @@ data class HoleItem(
 data class MatchShapesState(
     val level: Int,
     val shapes: List<ShapeItem> = buildShapes(level),
-    val holes: List<HoleItem> = buildHoles(level),
+    val holes: List<HoleItem> = buildHoles(shapes = buildShapes(level), level = level),
 ) {
 
     val isComplete: Boolean
@@ -134,8 +142,38 @@ data class MatchShapesState(
             else -> baseKinds.take(3)
         }
 
-        /** Fixed rotation cycle so results are deterministic across calls. */
-        private fun rotationForIndex(index: Int): Int = ((index % 3) + 1) * 90
+        /**
+         * The 90/180/270 rotations of [kind] that are actually visible on
+         * screen, in a fixed deterministic order. A shape with 4-fold (or
+         * finer) rotational symmetry -- CIRCLE, SQUARE, DIAMOND, CROSS here
+         * -- looks pixel-identical at every 90-degree step, so it has NO
+         * visible rotations: requiring one of those would be the exact
+         * "correct-looking shape bounces back for no visible reason" defect
+         * this game must never reproduce. HEXAGON, RECTANGLE and OVAL have
+         * 180-degree symmetry, so only their 90/270 steps are visible.
+         * TRIANGLE, STAR and PENTAGON have no rotational symmetry at any
+         * 90-degree step, so all three are visible.
+         */
+        internal fun visibleRotations(kind: ShapeKind): List<Int> = when (kind) {
+            ShapeKind.CIRCLE, ShapeKind.SQUARE, ShapeKind.DIAMOND, ShapeKind.CROSS -> emptyList()
+            ShapeKind.HEXAGON, ShapeKind.RECTANGLE, ShapeKind.OVAL -> listOf(90, 270)
+            ShapeKind.TRIANGLE, ShapeKind.STAR, ShapeKind.PENTAGON -> listOf(90, 180, 270)
+        }
+
+        /** Whether rotating [kind] ever changes how it looks on screen. */
+        fun hasVisibleRotation(kind: ShapeKind): Boolean = visibleRotations(kind).isNotEmpty()
+
+        /**
+         * Fixed, deterministic pick of a visible rotation for [kind], cycled
+         * by [index] so results vary across shapes of the same kind. Returns
+         * 0 (no rotation required) for any kind with no visible rotation --
+         * see [visibleRotations].
+         */
+        private fun requiredRotationFor(kind: ShapeKind, index: Int): Int {
+            val options = visibleRotations(kind)
+            if (options.isEmpty()) return 0
+            return options[index % options.size]
+        }
 
         private fun buildShapes(level: Int): List<ShapeItem> {
             val kinds = kindsFor(level)
@@ -144,18 +182,25 @@ data class MatchShapesState(
                 ShapeItem(
                     id = index,
                     kind = kind,
-                    requiredRotation = if (needsRotation) rotationForIndex(index) else 0,
+                    requiredRotation = if (needsRotation) requiredRotationFor(kind, index) else 0,
                 )
             }
         }
 
-        private fun buildHoles(level: Int): List<HoleItem> {
+        private fun buildHoles(shapes: List<ShapeItem>, level: Int): List<HoleItem> {
             val kinds = kindsFor(level)
             // Holes are laid out in a different order than shapes so the
             // matching kind isn't just "same position" -- the child must
             // look at shape and hole, not just line up columns.
             val shuffled = kinds.reversed()
-            return shuffled.mapIndexed { index, kind -> HoleItem(id = index, kind = kind) }
+            // Each kind appears at most once per level (see kindsFor), so the
+            // hole's required rotation is simply the matching shape's --
+            // drawing the hole at that rotation is what makes "turn the
+            // shape until it looks like the hole" the correct strategy.
+            return shuffled.mapIndexed { index, kind ->
+                val requiredRotation = shapes.firstOrNull { it.kind == kind }?.requiredRotation ?: 0
+                HoleItem(id = index, kind = kind, requiredRotation = requiredRotation)
+            }
         }
     }
 }
