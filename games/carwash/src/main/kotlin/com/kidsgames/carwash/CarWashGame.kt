@@ -3,6 +3,7 @@ package com.kidsgames.carwash
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -25,6 +26,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -90,7 +93,7 @@ import androidx.lifecycle.Lifecycle
 object CarWashGame : GameModule {
 
     override val id: String = "carwash"
-    override val icon: Int = R.drawable.ic_carwash
+    override val icon: Int = R.drawable.wash_car
     override val ageBand: AgeBand = AgeBand.FOUR_TO_FIVE
     override val estimatedMinutes: Int = 5
     override val levelCount: Int = 5
@@ -441,54 +444,41 @@ private fun starPath(width: Float, height: Float, points: Int): Path {
  */
 @Composable
 private fun CarCanvas(dirt: List<Float>) {
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val w = size.width
-        val h = size.height
-
-        // Simple vector car: body, roof, windows, wheels. No bundled
-        // artwork exists for this module -- see this file's final message.
-        val bodyTop = h * 0.42f
-        val bodyBottom = h * 0.78f
-        drawRoundRect(
-            color = KidPalette.Green,
-            topLeft = Offset(w * 0.06f, bodyTop),
-            size = androidx.compose.ui.geometry.Size(w * 0.88f, bodyBottom - bodyTop),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.06f),
+    // The car is now real artwork rather than drawn primitives, which means
+    // it can no longer share one Canvas with the dirt. The sync guarantee is
+    // preserved a different way: the Image and the dirt Canvas are siblings
+    // in ONE Box and BOTH fillMaxSize, so they are laid out in the identical
+    // rectangle. The dirt grid therefore still maps onto exactly the pixels
+    // CarWashState.scrub() judges -- there is no independently positioned or
+    // independently scaled overlay that could drift out of register.
+    Box(modifier = Modifier.fillMaxSize()) {
+        Image(
+            painter = painterResource(id = R.drawable.wash_car),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
         )
-        val roofPath = Path().apply {
-            moveTo(w * 0.22f, bodyTop)
-            lineTo(w * 0.32f, h * 0.2f)
-            lineTo(w * 0.68f, h * 0.2f)
-            lineTo(w * 0.78f, bodyTop)
-            close()
-        }
-        drawPath(roofPath, color = KidPalette.Green)
-        drawRoundRect(
-            color = KidPalette.Blue.copy(alpha = 0.55f),
-            topLeft = Offset(w * 0.36f, h * 0.24f),
-            size = androidx.compose.ui.geometry.Size(w * 0.28f, bodyTop - h * 0.24f - 4f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.02f),
-        )
-        val wheelRadius = w * 0.09f
-        drawCircle(color = KidPalette.OnSurface, radius = wheelRadius, center = Offset(w * 0.26f, bodyBottom))
-        drawCircle(color = KidPalette.OnSurface, radius = wheelRadius, center = Offset(w * 0.74f, bodyBottom))
 
         // Dirt overlay: one translucent brown blob per grid cell whose
         // dirt is still above zero, sized and centred on that cell -- the
         // SAME grid CarWashState.scrub() reads coordinates into.
-        val cellW = w / CarWashState.GRID_COLS
-        val cellH = h / CarWashState.GRID_ROWS
-        for (row in 0 until CarWashState.GRID_ROWS) {
-            for (col in 0 until CarWashState.GRID_COLS) {
-                val amount = dirt.getOrNull(row * CarWashState.GRID_COLS + col) ?: 0f
-                if (amount <= 0f) continue
-                val cx = cellW * (col + 0.5f)
-                val cy = cellH * (row + 0.5f)
-                drawCircle(
-                    color = DIRT_COLOR.copy(alpha = 0.55f * amount.coerceAtMost(1f)),
-                    radius = min(cellW, cellH) * 0.55f,
-                    center = Offset(cx, cy),
-                )
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            val cellW = w / CarWashState.GRID_COLS
+            val cellH = h / CarWashState.GRID_ROWS
+            for (row in 0 until CarWashState.GRID_ROWS) {
+                for (col in 0 until CarWashState.GRID_COLS) {
+                    val amount = dirt.getOrNull(row * CarWashState.GRID_COLS + col) ?: 0f
+                    if (amount <= 0f) continue
+                    val cx = cellW * (col + 0.5f)
+                    val cy = cellH * (row + 0.5f)
+                    drawCircle(
+                        color = DIRT_COLOR.copy(alpha = 0.55f * amount.coerceAtMost(1f)),
+                        radius = min(cellW, cellH) * 0.55f,
+                        center = Offset(cx, cy),
+                    )
+                }
             }
         }
     }

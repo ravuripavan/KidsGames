@@ -3,6 +3,7 @@ package com.kidsgames.memorypairs
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,6 +29,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -167,7 +171,7 @@ internal fun chooseGrid(cardCount: Int, maxWidth: Dp, maxHeight: Dp): GridSpec? 
 object MemoryPairsGame : GameModule {
 
     override val id: String = "memorypairs"
-    override val icon: Int = R.drawable.ic_memorypairs
+    override val icon: Int = R.drawable.animal_panda
     override val ageBand: AgeBand = AgeBand.FOUR_TO_FIVE
     override val estimatedMinutes: Int = 5
     override val levelCount: Int = 5
@@ -328,6 +332,19 @@ private fun CardView(card: MemoryCard, clickable: Boolean, onTap: () -> Unit) {
         animationSpec = tween(180),
         label = "card-flip-scale",
     )
+    // A real card turn. animateFloatAsState RETARGETS from wherever it
+    // currently is, so a card flipped back down mid-turn animates from its
+    // present angle instead of snapping -- the reason this is not an
+    // Animatable keyed on `revealed`, which would restart from 0 each time.
+    val turn by animateFloatAsState(
+        targetValue = if (revealed) 180f else 0f,
+        animationSpec = tween(320),
+        label = "card-flip-turn",
+    )
+    // Past the halfway point the far side is toward the viewer, so the face
+    // is what should be drawn. Counter-rotating it by 180 keeps the picture
+    // the right way round instead of mirror-imaged.
+    val showingFace = turn > 90f
 
     KidButton(
         onClick = { if (clickable) onTap() },
@@ -339,36 +356,73 @@ private fun CardView(card: MemoryCard, clickable: Boolean, onTap: () -> Unit) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    rotationY = turn
+                    cameraDistance = 12f * density
+                }
                 .background(
-                    if (revealed) KidPalette.Surface else KidPalette.OnSurface.copy(alpha = 0.15f),
+                    if (showingFace) KidPalette.Surface else KidPalette.Blue.copy(alpha = 0.85f),
                     RoundedCornerShape(12.dp),
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            if (revealed) {
+            if (showingFace) {
                 val (shape, color) = CardSymbols[card.symbolIndex % CardSymbols.size]
-                SymbolGlyph(shape = shape, color = color, size = MinTapTarget * 0.55f)
+                Box(
+                    modifier = Modifier.graphicsLayer { rotationY = 180f },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    SymbolGlyph(shape = shape, color = color, size = MinTapTarget * 0.55f)
+                }
+            } else {
+                // A patterned back, so a face-down card looks deliberate
+                // rather than like a missing tile.
+                Box(
+                    modifier = Modifier
+                        .size(MinTapTarget * 0.34f)
+                        .background(Color.White.copy(alpha = 0.75f), RoundedCornerShape(50)),
+                )
             }
         }
     }
 }
 
+/**
+ * The picture on a card face. One animal per [CardShape] slot.
+ *
+ * The `when` is exhaustive with NO `else`: [CardShape] has exactly ten
+ * entries and level 5 deals exactly ten pairs, so the set is consumed to the
+ * last member with nothing spare. If a future level asked for an eleventh
+ * pair, or a [CardShape] were added, this stops compiling rather than
+ * silently dealing the same animal as two different pairs -- which would
+ * make the board unmatchable in a way a four-year-old could never diagnose.
+ *
+ * An animal is a far better identity channel here than the geometric glyph
+ * it replaces: a child can NAME a panda, and naming is what makes a pair
+ * memorable. The shapes were already distinct enough to satisfy "colour is
+ * never the sole carrier"; this is about recall, not accessibility.
+ */
+private fun animalFor(shape: CardShape): Int = when (shape) {
+    CardShape.CIRCLE -> R.drawable.animal_panda
+    CardShape.SQUARE -> R.drawable.animal_elephant
+    CardShape.TRIANGLE -> R.drawable.animal_giraffe
+    CardShape.STAR -> R.drawable.animal_monkey
+    CardShape.DIAMOND -> R.drawable.animal_penguin
+    CardShape.HEART -> R.drawable.animal_pig
+    CardShape.CROSS -> R.drawable.animal_rabbit
+    CardShape.HEXAGON -> R.drawable.animal_hippo
+    CardShape.PENTAGON -> R.drawable.animal_parrot
+    CardShape.CRESCENT -> R.drawable.animal_snake
+}
+
 @Composable
 private fun SymbolGlyph(shape: CardShape, color: Color, size: Dp) {
-    Canvas(modifier = Modifier.size(size)) {
-        when (shape) {
-            CardShape.CIRCLE -> drawCircle(color = color)
-            CardShape.SQUARE -> drawRect(color = color)
-            CardShape.TRIANGLE -> drawPolygonPath(color, sides = 3)
-            CardShape.STAR -> drawStarPath(color)
-            CardShape.DIAMOND -> drawPolygonPath(color, sides = 4, rotationOffset = PI / 4)
-            CardShape.HEART -> drawHeartPath(color)
-            CardShape.CROSS -> drawCrossPath(color)
-            CardShape.HEXAGON -> drawPolygonPath(color, sides = 6)
-            CardShape.PENTAGON -> drawPolygonPath(color, sides = 5)
-            CardShape.CRESCENT -> drawCrescentPath(color)
-        }
-    }
+    Image(
+        painter = painterResource(id = animalFor(shape)),
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.size(size),
+    )
 }
 
 private fun DrawScope.drawPolygonPath(color: Color, sides: Int, rotationOffset: Double = 0.0) {

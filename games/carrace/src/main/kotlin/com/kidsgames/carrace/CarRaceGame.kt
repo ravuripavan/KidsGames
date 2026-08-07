@@ -82,7 +82,7 @@ import kotlinx.coroutines.flow.first
 object CarRaceGame : GameModule {
 
     override val id: String = "carrace"
-    override val icon: Int = R.drawable.ic_carrace
+    override val icon: Int = R.drawable.car_red
     override val ageBand: AgeBand = AgeBand.FOUR_TO_FIVE
     override val estimatedMinutes: Int = 4
     override val levelCount: Int = 5
