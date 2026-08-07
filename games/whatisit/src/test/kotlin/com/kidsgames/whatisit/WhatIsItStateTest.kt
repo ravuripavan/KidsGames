@@ -94,6 +94,46 @@ class WhatIsItStateTest {
     }
 
     @Test
+    fun `every reverse round offers three VISUALLY distinct options`() {
+        // B2: de-duplication by id alone is not enough -- two options that
+        // happen to render identically would make the round a coin flip.
+        // Every option in a reverse round must produce a different
+        // visualDescriptor, i.e. actually look different to the child.
+        val state = WhatIsItState(5)
+        for (round in state.rounds.filterIsInstance<Round.Reverse>()) {
+            val descriptors = round.options.map { visualDescriptor(it) }
+            assertEquals(
+                "reverse round options must be visually distinct: ${round.options.map { it.id }}",
+                descriptors.size,
+                descriptors.distinct().size,
+            )
+        }
+    }
+
+    @Test
+    fun `no two items in any level's round set share a visual descriptor`() {
+        // B1: the picture must vary per ITEM, not per sector. Simulated
+        // from the real round sets, no two rounds at any level may show the
+        // same rendered picture for two different items.
+        for (level in 1..5) {
+            val items = WhatIsItState(level).rounds.flatMap { round ->
+                when (round) {
+                    is Round.Name -> listOf(round.item)
+                    is Round.Reverse -> round.options
+                }
+            }
+            val byDescriptor = items.groupBy { visualDescriptor(it) }
+            for ((descriptor, group) in byDescriptor) {
+                val distinctIds = group.map { it.id }.distinct()
+                assertTrue(
+                    "level $level: items ${distinctIds} share visual descriptor $descriptor",
+                    distinctIds.size <= 1,
+                )
+            }
+        }
+    }
+
+    @Test
     fun `advance moves to the next round without mutating the original state`() {
         val state = WhatIsItState(1)
         val next = state.advance()

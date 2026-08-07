@@ -116,6 +116,68 @@ column, outside any scrollable region, so it holds unconditionally.
 
 ---
 
+## `:games:whatisit` — parked 2026-08-07
+
+Two review rounds, two fix rounds. Builds green, 20 tests pass, and every constraint
+in the spec is honoured except the one that matters most: the child cannot answer
+the question the game asks.
+
+**What works.** No text, no microphone, no permissions, no network. No fail states —
+`tapReverseOption` returns unchanged on a non-match, and a wrong tap now names what
+the child picked rather than buzzing at them, exactly as the spec asks. No dead
+ends: both round types have an always-available exit, and skipping still advances
+level accounting correctly. The volume poll is lifecycle-gated. `playRaw` targets
+the right item at all three call sites. The variant hash is deterministic across
+runtimes, confirmed by an independent reimplementation. Layout is measured rather
+than asserted.
+
+**Why it is parked — this one needs artwork, not code.**
+
+`ItemGlyph` draws one silhouette per *sector*. There are twelve sectors and 144
+catalogue items. Round 2 added `ItemVariant`, which decorates that silhouette with
+proportion, dot count, a corner mark, mirroring and an accent colour — so items now
+render *differently*. They still do not render *recognisably*.
+
+Level 1 asks the child to name dog, bird, orange, hand, eye. What they see: a paw
+with one dot, the same paw squashed with three dots, a circle, a stick figure, the
+same stick figure. A four year old shown a paw with three dots cannot say "bird".
+The game's only question has no derivable answer for any item whose sector glyph is
+not itself the item.
+
+The distinction that took two rounds to surface: **distinctness is not
+identifiability**. The uniqueness tests check that no two items share a descriptor,
+which is a pairwise property. The child sees ONE picture with nothing to compare it
+against, so pairwise difference is not the property the task needs. Two rounds were
+spent making a per-sector glyph carry per-item identity, and the second fixed the
+measurable half while leaving the child's actual task exactly where it was.
+
+No amount of procedural decoration on twelve silhouettes makes "what is it?"
+answerable. This module is the one most exposed to the missing-artwork gap, and the
+gap is now the blocker.
+
+**A bounded code fix worth doing whenever art lands.** The round-2 uniqueness tests
+are about 36x weaker than they read, and should be tightened at the same time:
+
+- `ItemVariant.swatchIndex` spans 0..255 in the descriptor but renders
+  `% KidPalette.Swatch.size` (7), so the descriptor distinguishes 256 states where
+  the screen shows 7. Fold the modulo into the descriptor.
+- `mirrored` changes the descriptor but is a visual no-op in 9 of the 12 sectors,
+  whose glyphs are horizontally symmetric. Only mug, cap and ball are asymmetric.
+- Accent colour counts as a differentiator even when `featureCount == 0` and
+  `accentKey == 0`, i.e. when nothing accent-coloured is drawn at all.
+
+With those folded in, two catalogue pairs currently render pixel-identically while
+passing every test — `clothes_dress`/`clothes_raincoat` and
+`house_broom`/`house_thermometer`, both reachable from level 3 up. Expect the
+tightened tests to fail and surface more.
+
+Also worth knowing: level 5's reverse mode is blind guessing today, because it
+identifies its target only by spoken audio and no audio plays anywhere in the app.
+It always exits, so it is not a dead end — but an e2e run showing "child completed
+level 5" is not evidence that the mode works.
+
+---
+
 ## Cross-cutting issues found while reviewing (not module defects)
 
 **Nothing in the app makes a sound, and nothing ever has.** `SoundBank.resourceFor`

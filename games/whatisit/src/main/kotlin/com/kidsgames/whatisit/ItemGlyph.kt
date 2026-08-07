@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.scale
 import com.kidsgames.designkit.KidPalette
 import com.kidsgames.vocab.Sector
 import com.kidsgames.vocab.VocabItem
@@ -21,16 +22,89 @@ import kotlin.math.sin
  * No real artwork exists yet for [VocabCatalogue] (see PlaceholderAssets.kt
  * in :core:vocab) -- every [VocabItem.image] is a placeholder integer, not a
  * resolvable drawable. This draws a simple vector stand-in per item instead
- * of leaving a blank box: one broad silhouette per [Sector] (a paw for
+ * of leaving a blank box: a broad silhouette per [Sector] (a paw for
  * animals, a car body for vehicles, and so on), coloured from the shared
- * [KidPalette.Swatch] so every sector reads as visually distinct without
- * relying on colour alone -- the SHAPE is what differs.
+ * [KidPalette.Swatch], THEN varied per-ITEM using [ItemVariant.forItem] --
+ * proportion, mirroring, decoration dots, and an accent mark all derive
+ * deterministically from the item's own id. Two items sharing a sector
+ * (e.g. dog and bird, both [Sector.ANIMALS]) therefore never render as the
+ * same picture: shape sets the sector, the per-item variant is what makes
+ * THIS item tellable apart from every other item the child could confuse it
+ * with -- see [visualDescriptor] and the uniqueness tests in
+ * WhatIsItStateTest and ItemVariantTest.
  */
 @Composable
 fun ItemGlyph(item: VocabItem, modifier: Modifier = Modifier) {
-    val color = KidPalette.Swatch[item.sector.ordinal % KidPalette.Swatch.size]
+    val baseColor = KidPalette.Swatch[item.sector.ordinal % KidPalette.Swatch.size]
+    val variant = ItemVariant.forItem(item)
+    val accentColor = KidPalette.Swatch[variant.swatchIndex % KidPalette.Swatch.size]
     Canvas(modifier = modifier) {
-        drawSectorGlyph(item.sector, color)
+        drawItemVariant(item.sector, variant, baseColor, accentColor)
+    }
+}
+
+/**
+ * Draws the sector's base silhouette with per-item proportion scaling and
+ * optional horizontal mirroring, then overlays [ItemVariant.featureCount]
+ * decoration dots and one of four [ItemVariant.accentKey] accent marks in
+ * [accentColor]. Colour is never the SOLE carrier here -- shape (proportion,
+ * mirroring, dot count, accent shape) all vary too.
+ */
+private fun DrawScope.drawItemVariant(
+    sector: Sector,
+    variant: ItemVariant,
+    baseColor: Color,
+    accentColor: Color,
+) {
+    // 0 squat, 1 neutral, 2 tall -- a visible proportion difference even
+    // when two items share every other variant field.
+    val (scaleX, scaleY) = when (variant.proportionKey) {
+        0 -> 0.85f to 1.12f
+        2 -> 1.12f to 0.85f
+        else -> 1f to 1f
+    }
+    val mirrorX = if (variant.mirrored) -1f else 1f
+    scale(scaleX = scaleX * mirrorX, scaleY = scaleY, pivot = Offset(size.width / 2f, size.height / 2f)) {
+        drawSectorGlyph(sector, baseColor)
+    }
+    drawFeatureDots(variant.featureCount, accentColor)
+    drawAccentMark(variant.accentKey, accentColor)
+}
+
+/** 0..3 small dots along the top edge -- a per-item decoration, not a sector marker. */
+private fun DrawScope.drawFeatureDots(count: Int, color: Color) {
+    if (count <= 0) return
+    val w = size.width
+    val h = size.height
+    val dotRadius = w * 0.045f
+    for (i in 0 until count) {
+        val x = w * (0.3f + i * 0.2f)
+        drawCircle(color = color, radius = dotRadius, center = Offset(x, h * 0.08f))
+    }
+}
+
+/** One of four small accent shapes in a fixed corner, keyed off the item -- a visible extra differentiator beyond dots and proportion. */
+private fun DrawScope.drawAccentMark(key: Int, color: Color) {
+    val w = size.width
+    val h = size.height
+    when (key) {
+        0 -> Unit
+        1 -> drawLine(
+            color = color,
+            start = Offset(w * 0.05f, h * 0.95f),
+            end = Offset(w * 0.25f, h * 0.95f),
+            strokeWidth = w * 0.05f,
+        )
+        2 -> drawCircle(color = color, radius = w * 0.07f, center = Offset(w * 0.9f, h * 0.1f))
+        else -> {
+            val path = Path().apply {
+                moveTo(w * 0.85f, h * 0.95f)
+                lineTo(w * 0.98f, h * 0.95f)
+                lineTo(w * 0.98f, h * 0.82f)
+                close()
+            }
+            drawPath(path, color = color)
+        }
     }
 }
 

@@ -5,6 +5,7 @@ import android.media.AudioManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -12,10 +13,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,7 +29,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
@@ -37,22 +37,21 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.kidsgames.designkit.Celebration
 import com.kidsgames.designkit.KidButton
 import com.kidsgames.designkit.KidPalette
-import com.kidsgames.designkit.MinTapTarget
 import com.kidsgames.designkit.SoundBank
 import com.kidsgames.designkit.rememberSoundBank
 import com.kidsgames.gameapi.AgeBand
 import com.kidsgames.gameapi.GameModule
 import com.kidsgames.gameapi.Outcome
 import com.kidsgames.vocab.VocabItem
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 /**
  * Shows a picture and invites the child to say what it is. Tapping the
@@ -60,31 +59,18 @@ import kotlinx.coroutines.launch
  * child's answer is NEVER captured or checked -- see [WhatIsItState]'s KDoc.
  * The pause before tapping the speaker IS the activity.
  *
- * LAYOUT BUDGET (comment-first, per the lessons learned elsewhere in this
- * suite) against the ~360x544dp the shell hands this composable, with no
- * manual bottom-left exit-zone reservation needed (the shell now does that
- * structurally):
- *
- * Naming round (forward mode):
- *   top padding            20dp
- *   picture card           240dp  (a 160dp glyph centred inside it)
- *   gap                     24dp
- *   speaker button          96dp
- *   gap                     24dp
- *   next-arrow button       88dp
- *   ------------------------------
- *   used                   492dp  of 544dp -> 52dp spare at the bottom
- *
- * Reverse round (L5 only):
- *   top padding             20dp
- *   "what's this called?" speaker button   96dp
- *   gap                     20dp
- *   row of 3 option buttons 100dp  (100*3 + 12*2 = 324dp of 328dp usable
- *                                   width, 360dp screen minus 16dp margins
- *                                   on each side)
- *   gap                     20dp
- *   ------------------------------
- *   used                   256dp  of 544dp -> 288dp spare
+ * LAYOUT is MEASURED, not asserted. The real budget this composable gets
+ * from the shell is a `GameHost` content box with `ExitZoneHeight` (96dp)
+ * already subtracted and safe-drawing insets applied -- roughly 360x496dp on
+ * a typical device, NOT the 544dp a stale comment here once claimed (that
+ * 544dp figure left 4dp of real spare against a fixed 492dp naming-round
+ * layout, and 4dp against a fixed 324dp-of-328dp reverse row -- either one
+ * clips the moment a child raises the system Display-size setting, and the
+ * naming round's next arrow is the ONLY way out of a round). Both
+ * [NamingRound] and [ReverseRound] therefore read their available size from
+ * a [BoxWithConstraints] and size every element as a FRACTION of it, so a
+ * smaller viewport shrinks proportionally instead of clipping an off-screen
+ * control.
  *
  * AUDIO EXEMPTION: unlike every other game in the suite, this one is not
  * fully playable muted, because the spoken name IS its content (per the
@@ -158,17 +144,23 @@ object WhatIsItGame : GameModule {
                                 .firstOrNull { it.id == round.targetId }
                                 ?.let { soundBank.playRaw(it.audio) }
                         },
-                        onTapOption = { itemId ->
+                        onTapOption = { tapped ->
                             if (!celebrating) {
-                                val next = state.tapReverseOption(itemId)
+                                // The tapped picture is always named aloud,
+                                // right or wrong -- per the design doc, the
+                                // child is told what they picked, never that
+                                // they erred. There is no separate "wrong"
+                                // chime; a mismatch simply names the item and
+                                // leaves the round in place to try again.
+                                soundBank.playRaw(tapped.audio)
+                                val next = state.tapReverseOption(tapped.id)
                                 if (next != state) {
                                     soundBank.play(SoundBank.Cue.SUCCESS)
                                     state = next
-                                } else {
-                                    soundBank.play(SoundBank.Cue.GENTLE_RETRY)
                                 }
                             }
                         },
+                        onNext = { if (!celebrating) state = state.advance() },
                     )
                     null -> Unit
                 }
@@ -181,7 +173,14 @@ object WhatIsItGame : GameModule {
     }
 }
 
-/** One naming round: a big picture, a speaker to hear it, an arrow to move on. */
+/**
+ * One naming round: a big picture, a speaker to hear it, an arrow to move
+ * on. Sizes every element as a fraction of the MEASURED available space
+ * (via [BoxWithConstraints]) rather than fixed dp constants, so a smaller
+ * viewport (e.g. a larger system Display-size setting) shrinks everything
+ * together instead of clipping the next-arrow -- the only way out of this
+ * round -- off the bottom of the screen.
+ */
 @Composable
 private fun NamingRound(
     item: VocabItem,
@@ -191,42 +190,62 @@ private fun NamingRound(
 ) {
     var speakTrigger by remember(item.id) { mutableStateOf(0) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(top = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        PictureCard(item = item, speakTrigger = speakTrigger, size = 240.dp, glyphSize = 160.dp)
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val availableHeight = maxHeight
+        // Proportional budget: picture ~44%, speaker ~17%, next-arrow ~16%
+        // of available height, with the remainder split across gaps -- this
+        // degrades gracefully on a smaller measured viewport instead of a
+        // fixed-dp layout that clips.
+        val pictureSize = (availableHeight * 0.44f).coerceAtMost(maxWidth * 0.75f)
+        val speakerSize = (availableHeight * 0.17f).coerceIn(64.dp, 100.dp)
+        val nextSize = (availableHeight * 0.16f).coerceIn(64.dp, 96.dp)
+        val gap = (availableHeight * 0.045f).coerceIn(8.dp, 24.dp)
 
-        androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(24.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = gap),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            PictureCard(item = item, speakTrigger = speakTrigger, size = pictureSize, glyphSize = pictureSize * 0.67f)
 
-        SpeakerButton(
-            size = 96.dp,
-            muted = muted,
-            onTap = {
-                speakTrigger++
-                onSpeak()
-            },
-        )
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(gap))
 
-        androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(24.dp))
+            SpeakerButton(
+                size = speakerSize,
+                muted = muted,
+                onTap = {
+                    speakTrigger++
+                    onSpeak()
+                },
+            )
 
-        KidButton(onClick = onNext, testTag = "next-item") {
-            Box(modifier = Modifier.size(88.dp), contentAlignment = Alignment.Center) {
-                NextArrowGlyph(modifier = Modifier.size(48.dp))
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(gap))
+
+            KidButton(onClick = onNext, testTag = "next-item") {
+                Box(modifier = Modifier.size(nextSize), contentAlignment = Alignment.Center) {
+                    NextArrowGlyph(modifier = Modifier.size(nextSize * 0.55f))
+                }
             }
         }
     }
 }
 
-/** L5 reverse round: hear a name, tap the matching picture among three. */
+/**
+ * L5 reverse round: hear a name, tap the matching picture among three. A
+ * next-arrow identical in spirit to [NamingRound]'s is ALWAYS present, so a
+ * muted child (who cannot hear which option is the target) is never stuck
+ * here -- tapping it simply moves on, the same "no fail state" completion
+ * path as everywhere else in this module. Sized from measured constraints
+ * for the same reason as [NamingRound].
+ */
 @Composable
 private fun ReverseRound(
     round: Round.Reverse,
     muted: Boolean,
     onSpeak: () -> Unit,
-    onTapOption: (String) -> Unit,
+    onTapOption: (VocabItem) -> Unit,
+    onNext: () -> Unit,
 ) {
     var speakTrigger by remember(round) { mutableStateOf(0) }
     var wrongTapId by remember(round) { mutableStateOf<String?>(null) }
@@ -239,37 +258,60 @@ private fun ReverseRound(
         onSpeak()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(top = 20.dp, start = 16.dp, end = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        SpeakerButton(
-            size = 96.dp,
-            muted = muted,
-            onTap = {
-                speakTrigger++
-                onSpeak()
-            },
-        )
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val availableHeight = maxHeight
+        val availableWidth = maxWidth
+        val speakerSize = (availableHeight * 0.19f).coerceIn(64.dp, 100.dp)
+        val nextSize = (availableHeight * 0.16f).coerceIn(64.dp, 96.dp)
+        val gap = (availableHeight * 0.04f).coerceIn(8.dp, 20.dp)
+        val sidePadding = (availableWidth * 0.045f).coerceIn(8.dp, 16.dp)
+        // Three options plus two inter-option gaps must fit the measured
+        // width; the gap itself grows a little on a roomier screen (per L1)
+        // rather than staying pinned at a tight fixed 12dp.
+        val optionGap = (availableWidth * 0.035f).coerceIn(12.dp, 20.dp)
+        val optionSize = ((availableWidth - sidePadding * 2 - optionGap * 2) / 3).coerceIn(64.dp, 110.dp)
 
-        androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(20.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = gap, start = sidePadding, end = sidePadding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            SpeakerButton(
+                size = speakerSize,
+                muted = muted,
+                onTap = {
+                    speakTrigger++
+                    onSpeak()
+                },
+            )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            for (option in round.options) {
-                ReverseOptionButton(
-                    item = option,
-                    wrongTapId = wrongTapId,
-                    wrongTapTrigger = wrongTapTrigger,
-                    onTap = {
-                        if (option.id != round.targetId) {
-                            wrongTapId = option.id
-                            wrongTapTrigger++
-                        }
-                        onTapOption(option.id)
-                    },
-                )
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(gap))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(optionGap)) {
+                for (option in round.options) {
+                    ReverseOptionButton(
+                        item = option,
+                        size = optionSize,
+                        wrongTapId = wrongTapId,
+                        wrongTapTrigger = wrongTapTrigger,
+                        onTap = {
+                            if (option.id != round.targetId) {
+                                wrongTapId = option.id
+                                wrongTapTrigger++
+                            }
+                            onTapOption(option)
+                        },
+                    )
+                }
+            }
+
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(gap))
+
+            KidButton(onClick = onNext, testTag = "reverse-next") {
+                Box(modifier = Modifier.size(nextSize), contentAlignment = Alignment.Center) {
+                    NextArrowGlyph(modifier = Modifier.size(nextSize * 0.55f))
+                }
             }
         }
     }
@@ -312,6 +354,7 @@ private fun PictureCard(
 @Composable
 private fun ReverseOptionButton(
     item: VocabItem,
+    size: Dp,
     wrongTapId: String?,
     wrongTapTrigger: Int,
     onTap: () -> Unit,
@@ -328,8 +371,8 @@ private fun ReverseOptionButton(
     KidButton(onClick = onTap, testTag = "reverse-option-${item.id}") {
         Box(
             modifier = Modifier
-                .size(100.dp)
-                .padding(8.dp),
+                .size(size)
+                .padding(size * 0.08f),
             contentAlignment = Alignment.Center,
         ) {
             ItemGlyph(
@@ -439,16 +482,23 @@ private fun NextArrowGlyph(modifier: Modifier = Modifier) {
  * Polls the current media volume roughly once a second. There is no push
  * notification for volume changes without registering a broadcast receiver
  * (a capability :core:designkit does not expose to game modules), so a
- * lightweight poll is the closest honest option available here.
+ * lightweight poll is the closest honest option available here. The poll is
+ * gated by `repeatOnLifecycle(STARTED)` so it suspends the moment the app is
+ * backgrounded and resumes on return -- it never wakes once a second with
+ * the screen off, matching the suite's requirement that animation/activity
+ * pause when not visible.
  */
 @Composable
 private fun rememberIsDeviceMuted(): Boolean {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var muted by remember { mutableStateOf(isMuted(context)) }
-    LaunchedEffect(context) {
-        while (true) {
-            muted = isMuted(context)
-            delay(1000L)
+    LaunchedEffect(context, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                muted = isMuted(context)
+                delay(1000L)
+            }
         }
     }
     return muted

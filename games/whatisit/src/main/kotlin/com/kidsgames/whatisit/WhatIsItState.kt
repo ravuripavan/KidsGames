@@ -121,25 +121,44 @@ data class WhatIsItState(
 
         /**
          * Deterministic reverse rounds: each picks a target and two other
-         * DISTINCT items spread across the pool (never random, so the same
-         * level always produces the same rounds), then rotates their display
-         * order by round index so the target isn't always shown in the same
+         * items spread across the pool (never random, so the same level
+         * always produces the same rounds), then rotates their display order
+         * by round index so the target isn't always shown in the same
          * position.
+         *
+         * The "other" candidates are rejected not just on matching `id` but
+         * on matching [visualDescriptor] -- what the child can actually SEE
+         * (see [ItemVariant]). De-duplicating by id alone would let two
+         * items that happen to render identically (same sector, same
+         * per-item variant tuple) both appear as options, turning the round
+         * into a coin flip no matter how the catalogue is reordered.
          */
         private fun buildReverseRounds(pool: List<VocabItem>, count: Int): List<Round.Reverse> {
             if (pool.size < 3 || count <= 0) return emptyList()
             return (0 until count).map { i ->
                 val base = (i * 7) % pool.size
                 val target = pool[base]
+                val usedDescriptors = mutableSetOf(visualDescriptor(target))
+
+                fun findDistinctFrom(startOffset: Int): VocabItem {
+                    for (step in 0 until pool.size) {
+                        val candidate = pool[(base + startOffset + step) % pool.size]
+                        val descriptor = visualDescriptor(candidate)
+                        if (descriptor !in usedDescriptors) {
+                            usedDescriptors += descriptor
+                            return candidate
+                        }
+                    }
+                    // Pool too small/homogeneous to find a third distinct
+                    // look -- fall back to the next item; buildRounds only
+                    // reaches this path for pathologically tiny pools.
+                    return pool[(base + startOffset) % pool.size]
+                }
+
                 val offset1 = (pool.size / 3).coerceAtLeast(1)
                 val offset2 = (2 * pool.size / 3).coerceAtLeast(2)
-
-                var other1 = pool[(base + offset1) % pool.size]
-                if (other1.id == target.id) other1 = pool[(base + 1) % pool.size]
-
-                var other2 = pool[(base + offset2) % pool.size]
-                if (other2.id == target.id || other2.id == other1.id) other2 = pool[(base + 2) % pool.size]
-                if (other2.id == target.id || other2.id == other1.id) other2 = pool[(base + 3) % pool.size]
+                val other1 = findDistinctFrom(offset1)
+                val other2 = findDistinctFrom(offset2)
 
                 val options = listOf(target, other1, other2)
                 val rotation = i % 3
