@@ -115,6 +115,21 @@ data class CarWashState(
 
         private fun amountFor(tool: Tool): Float = if (tool == Tool.HOSE) 0.30f else 0.22f
 
+        /**
+         * Pure accumulate-until-target decision for the sandbox completion
+         * timer: given how much FOREGROUND play has already accumulated and
+         * a single tick's duration, returns the new accumulated total after
+         * one more tick, coerced so it never overshoots [targetMillis]. The
+         * caller (the Composable's `LaunchedEffect`) is responsible for the
+         * actual suspension between ticks and for stopping once
+         * `accumulatedMillis >= targetMillis` -- this function only has to
+         * prove the arithmetic terminates at the target rather than looping
+         * forever, which is exactly what a unit test can assert without any
+         * Android dependency.
+         */
+        fun accumulatePlayMillis(accumulatedMillis: Long, tickMillis: Long, targetMillis: Long): Long =
+            (accumulatedMillis + tickMillis).coerceAtMost(targetMillis)
+
         /** Builds the starting state for [level]: every cell dirty, sponge equipped (always unlocked first). */
         fun initial(level: Int): CarWashState {
             val value = initialDirtValue(level)

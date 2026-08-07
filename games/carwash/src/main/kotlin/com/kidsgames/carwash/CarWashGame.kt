@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,6 +33,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import android.os.SystemClock
 import com.kidsgames.designkit.Celebration
 import com.kidsgames.designkit.KidButton
 import com.kidsgames.designkit.KidPalette
@@ -46,8 +48,8 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 import kotlinx.coroutines.delay
-import androidx.lifecycle.Lifecycle
 import kotlinx.coroutines.flow.first
+import androidx.lifecycle.Lifecycle
 
 /**
  * Sandbox: drag a sponge, hose, and (from level 3) a dryer, and (from level
@@ -128,10 +130,28 @@ object CarWashGame : GameModule {
         }
 
         // Sandbox completion: fires once, unconditionally, after a fixed
-        // amount of open play -- never gated on how clean the car is.
+        // amount of FOREGROUND play -- never gated on how clean the car is.
+        // `repeatOnLifecycle` does NOT return when its block completes: by
+        // contract it re-launches the block on every entry to STARTED and
+        // suspends the caller until the lifecycle is DESTROYED, which made
+        // `onFinished` below it permanently unreachable. Instead, follow
+        // `games:carrace`'s shape: await
+        // `lifecycle.currentStateFlow.first { it.isAtLeast(STARTED) }`
+        // before each tick. That suspends while backgrounded and RESUMES
+        // (returns) the instant the app is foreground again, so the
+        // surrounding while-loop -- and the `onFinished` call after it --
+        // can actually complete. `playedMillis` still lives in this outer
+        // coroutine, so a suspend/resume resumes accounting from the
+        // accumulated value, never from zero: a child who plays 20s, has
+        // the phone taken for three minutes, and gets it back experiences
+        // 20s counted, not three minutes plus 20s.
         LaunchedEffect(level) {
-            lifecycleOwner.lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.STARTED) }
-            delay(SANDBOX_MILLIS)
+            var playedMillis = 0L
+            while (playedMillis < SANDBOX_MILLIS) {
+                lifecycleOwner.lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.STARTED) }
+                delay(FOREGROUND_TICK_MILLIS)
+                playedMillis = CarWashState.accumulatePlayMillis(playedMillis, FOREGROUND_TICK_MILLIS, SANDBOX_MILLIS)
+            }
             lifecycleOwner.lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.STARTED) }
             onFinished(Outcome.Completed)
         }
@@ -148,10 +168,19 @@ object CarWashGame : GameModule {
             val next = state.scrub(row, col)
             if (next !== state) {
                 state = next
-                val now = System.currentTimeMillis()
+                // Monotonic clock: System.currentTimeMillis() can jump
+                // backwards on a wall-clock correction (NTP sync crossing
+                // networks, a parent changing the time) and silence the
+                // scrub cue until wall time catches back up.
+                val now = SystemClock.elapsedRealtime()
                 if (now - lastCueAtMillis >= SOUND_THROTTLE_MILLIS) {
                     lastCueAtMillis = now
-                    soundBank.play(SoundBank.Cue.SUCCESS)
+                    // TAP, not SUCCESS: SUCCESS is the suite's achievement
+                    // register (shared with Celebration) and firing it ~6
+                    // times a second during a drag both misuses that
+                    // register and overlaps SoundPool's 4-stream cap at
+                    // this cadence. TAP is a short, repeatable texture.
+                    soundBank.play(SoundBank.Cue.TAP)
                 }
             }
         }
@@ -182,6 +211,28 @@ object CarWashGame : GameModule {
                 Box(
                     modifier = Modifier
                         .size(carWidth, carHeight)
+                        // A four year old's first touch on a screen full of
+                        // dirt is far more likely to be a POKE than a drag,
+                        // and `detectDragGestures` by construction does not
+                        // fire until touch slop is exceeded -- a bare tap
+                        // would otherwise be completely inert. This detector
+                        // is on its OWN chained `.pointerInput`, not folded
+                        // into the drag one behind a shared `launch`: two
+                        // gesture detectors racing inside one `pointerInput`
+                        // block is exactly what silently ate the first
+                        // stroke in `games:tracelines`, because neither
+                        // detector is guaranteed to register before the
+                        // first DOWN. Two separately chained modifiers each
+                        // get their own pointer event stream from the start.
+                        .pointerInput(level) {
+                            val widthPx = size.width.toFloat()
+                            val heightPx = size.height.toFloat()
+                            detectTapGestures(
+                                onTap = { offset ->
+                                    handleScrubAt(offset.x, offset.y, widthPx, heightPx)
+                                },
+                            )
+                        }
                         .pointerInput(level) {
                             val widthPx = size.width.toFloat()
                             val heightPx = size.height.toFloat()
@@ -211,18 +262,21 @@ object CarWashGame : GameModule {
 
     private const val SANDBOX_MILLIS = 180_000L
     private const val SOUND_THROTTLE_MILLIS = 160L
+    private const val FOREGROUND_TICK_MILLIS = 500L
 }
 
 // --- Layout budget -------------------------------------------------------
 // Worked against the worst case: a 360dp-wide phone, level 4/5's five-tool
 // tray (the largest tray any level shows).
 //
-// Tray, per row: 3 tools * 64dp KidButtons + 2 gaps * 8dp + 2 * 12dp row
-// padding = 192 + 16 + 24 = 232dp <= 360dp, with slack to spare (this is
-// deliberately narrower than puzzleboard's 4-per-row tray, which measured
-// 318dp against the same 360dp floor -- fewer, chunkier icons here).
+// Tray, per row: 3 tools * 64dp KidButtons + 2 gaps * 16dp (TRAY_BUTTON_GAP_DP)
+// + 2 * 8dp column padding (TRAY_COLUMN_PADDING_DP) = 192 + 32 + 16 = 240dp
+// <= 360dp, with slack to spare (this is deliberately narrower than
+// puzzleboard's 4-per-row tray, which measured 318dp against the same
+// 360dp floor -- fewer, chunkier icons here).
 // Five tools wrap onto two rows of 3 and 2. Tray block height:
-// 2 rows * 64dp + 1 gap * 8dp + 2 * 8dp column padding = 128 + 8 + 16 = 152dp.
+// 2 rows * 64dp + 1 row gap * 16dp (TRAY_ROW_SPACING_DP) + 2 * 8dp column
+// padding = 128 + 16 + 16 = 160dp.
 // Levels 1-3 (1-3 tools) fit on a single row, so their tray is only
 // 64 + 16 = 80dp tall -- strictly less, never more, than the level 4/5 case.
 //
@@ -231,11 +285,19 @@ object CarWashGame : GameModule {
 // never assumed. On a 360x640dp device with the shell's own safeDrawing
 // inset and 96dp exit strip already reserved structurally (per the shell's
 // own accounting, not this module's), the worst case (level 4/5) leaves
-// roughly 496 - 152 - 16 = 328dp of height for the car, comfortably above
-// [MIN_CAR_CONTENT_DP], and the full 360dp - 2*[CAR_PADDING_DP] = 312dp of
+// roughly 496 - 160 - 16 = 320dp of height for the car, comfortably clear
+// of anything scrollable, and the full 360dp - 2*[CAR_PADDING_DP] = 312dp of
 // width. Nothing here scrolls at any level.
 private const val TOOLS_PER_TRAY_ROW = 3
-private val TRAY_ROW_SPACING_DP = 8.dp
+// Gap between adjacent 64dp tool buttons, applied identically on BOTH axes:
+// 8dp of dead space between two live targets is about 1.3mm, thin enough
+// that a clumsy hand can clip both, whether those two targets sit side by
+// side in the same row (WAX/POLISH) or stacked between rows (the centred
+// [WAX, POLISH] row sitting directly under [SPONGE, HOSE, DRYER] at L4/L5).
+// There is plenty of budget on both axes (see the arithmetic above) to give
+// every adjacent pair of targets this much room.
+private val TRAY_ROW_SPACING_DP = 16.dp
+private val TRAY_BUTTON_GAP_DP = 16.dp
 private val TRAY_COLUMN_PADDING_DP = 8.dp
 private val CAR_PADDING_DP = 16.dp
 
@@ -253,7 +315,7 @@ private fun ToolTray(unlocked: List<Tool>, selected: Tool, onSelect: (Tool) -> U
                 horizontalArrangement = Arrangement.Center,
             ) {
                 rowTools.forEachIndexed { index, tool ->
-                    if (index > 0) Box(modifier = Modifier.size(TRAY_ROW_SPACING_DP))
+                    if (index > 0) Box(modifier = Modifier.size(TRAY_BUTTON_GAP_DP))
                     ToolButton(tool = tool, isSelected = tool == selected, onClick = { onSelect(tool) })
                 }
             }
@@ -445,13 +507,22 @@ private val DIRT_COLOR = Color(0xFF6D4C2A)
 @Composable
 private fun ToolEffect(tool: Tool, point: Offset?, trigger: Int) {
     val alpha = remember(tool) { Animatable(0f) }
+    // The flourish's own draw position is captured HERE, inside the effect
+    // that starts the fade, rather than read live from [point] on every
+    // recomposition. [point] is nulled the instant a drag ends (or was
+    // never set at all, for a tap that fires once and never moves again),
+    // which -- if read live below -- would make the Canvas bail out via
+    // `?: return` before the 260ms fade this comment describes ever had a
+    // chance to render a single frame.
+    var effectPoint by remember(tool) { mutableStateOf<Offset?>(null) }
     LaunchedEffect(trigger) {
         if (point != null) {
+            effectPoint = point
             alpha.snapTo(1f)
             alpha.animateTo(0f, animationSpec = tween(260))
         }
     }
-    val p = point ?: return
+    val p = effectPoint ?: return
     if (alpha.value <= 0f) return
 
     Canvas(modifier = Modifier.fillMaxSize()) {

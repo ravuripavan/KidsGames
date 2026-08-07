@@ -207,6 +207,21 @@ catalogue entries become 12 pictures — level 1 shows the same paw for "dog" an
 item, which makes the task answerable, but the game only becomes genuinely good
 with real artwork. It is the module most exposed to the missing-assets gap.
 
+**`Lifecycle.currentStateFlow` leaks an observer on every call, in four modules.**
+It is a getter, not a cached property: each call allocates a fresh
+`MutableStateFlow`, creates a `LifecycleEventObserver`, calls `addObserver`, and
+never removes it. `:games:carwash` calls it once per 500ms tick, so 361 observers
+accumulate per level session and live until the Activity is destroyed.
+
+No child-visible effect — roughly 70KB per session and a few hundred no-op
+callbacks per lifecycle event — but it is in `:games:carrace`, `:games:musicpad`
+and `:games:cardesign` as well, because the correct lifecycle-gating pattern was
+copied from module to module along with this flaw.
+
+One-line fix in each: hoist to
+`val states = remember(lifecycleOwner) { lifecycleOwner.lifecycle.currentStateFlow }`
+and collect from that. Worth a single Phase 3 sweep rather than a round per module.
+
 **`KidButton`'s 64dp floor is not structural under `weight`.** The guarantee is
 `Modifier.defaultMinSize`, which by definition only applies when the incoming
 constraint is unbounded. `Modifier.weight(1f)` supplies an EXACT width, so the

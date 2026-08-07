@@ -179,4 +179,31 @@ class CarWashStateTest {
         s = s.scrub(0, 0)
         assertEquals(before + 1, s.strokeCount)
     }
+
+    @Test
+    fun `accumulatePlayMillis reaches the target rather than looping forever`() {
+        var accumulated = 0L
+        var iterations = 0
+        while (accumulated < 180_000L) {
+            accumulated = CarWashState.accumulatePlayMillis(accumulated, 500L, 180_000L)
+            iterations += 1
+            assertTrue("did not terminate", iterations <= 1_000)
+        }
+        assertEquals(180_000L, accumulated)
+        assertEquals(360, iterations)
+    }
+
+    @Test
+    fun `accumulatePlayMillis never overshoots the target on an uneven final tick`() {
+        val result = CarWashState.accumulatePlayMillis(179_900L, 500L, 180_000L)
+        assertEquals(180_000L, result)
+    }
+
+    @Test
+    fun `accumulatePlayMillis resumes from the accumulated value, not zero`() {
+        val afterOneTick = CarWashState.accumulatePlayMillis(0L, 500L, 180_000L)
+        val afterASimulatedBackgroundGap = afterOneTick // value alone carries state across a suspend/resume
+        val afterAnotherTick = CarWashState.accumulatePlayMillis(afterASimulatedBackgroundGap, 500L, 180_000L)
+        assertEquals(1_000L, afterAnotherTick)
+    }
 }
