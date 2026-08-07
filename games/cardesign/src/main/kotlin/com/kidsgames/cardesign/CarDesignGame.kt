@@ -12,9 +12,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,6 +36,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import com.kidsgames.designkit.Celebration
@@ -45,6 +49,7 @@ import com.kidsgames.gameapi.AgeBand
 import com.kidsgames.gameapi.GameModule
 import com.kidsgames.gameapi.Outcome
 import kotlin.math.PI
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -90,7 +95,6 @@ object CarDesignGame : GameModule {
         val lifecycleOwner = LocalLifecycleOwner.current
 
         var state by remember(level) { mutableStateOf(CarDesignState.initial(level)) }
-        var sparkling by remember(level) { mutableStateOf(false) }
 
         // Where the child last tapped the car, in the canvas's own 0f..1f
         // fractional space -- purely cosmetic feedback, never read by the
@@ -98,43 +102,78 @@ object CarDesignGame : GameModule {
         // `if (trigger > 0)`).
         var tapTrigger by remember(level) { mutableStateOf(0) }
         var lastTapFraction by remember(level) { mutableStateOf<Offset?>(null) }
+        var celebrating by remember(level) { mutableStateOf(false) }
+
+        // Hoisted once per lifecycle owner so the completion effect below
+        // never registers a second, un-removed observer on recomposition.
+        val states = remember(lifecycleOwner) { lifecycleOwner.lifecycle.currentStateFlow }
 
         // Sandbox completion: fires once, unconditionally, after a fixed
-        // amount of open play -- never gated on how the car looks.
+        // amount of open play -- never gated on how the car looks. Elapsed
+        // time is accumulated in a lifecycle-gated loop (one 1s tick at a
+        // time, each re-checking STARTED) rather than a single flat `delay`,
+        // so time spent backgrounded never counts toward the span -- a child
+        // who leaves for a call and returns still gets a full session.
         LaunchedEffect(level) {
-            lifecycleOwner.lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.STARTED) }
-            delay(SANDBOX_MILLIS)
-            lifecycleOwner.lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.STARTED) }
+            var elapsed = 0L
+            while (elapsed < SANDBOX_MILLIS) {
+                states.first { it.isAtLeast(Lifecycle.State.STARTED) }
+                delay(1000L)
+                elapsed += 1000L
+            }
+            celebrating = true
+            delay(900L)
+            // Re-await STARTED: the delay above can itself span a
+            // backgrounding, and without re-checking here `onFinished` could
+            // fire while nothing is on screen to show it happened.
+            states.first { it.isAtLeast(Lifecycle.State.STARTED) }
             onFinished(Outcome.Completed)
         }
 
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KidPalette.Background),
         ) {
-            ItemTray(
-                unlocked = CarDesignState.unlockedItemsFor(level),
-                selected = state.selected,
-                onSelect = { item ->
-                    state = state.selectItem(item)
-                    soundBank.play(SoundBank.Cue.TAP)
-                },
-            )
+            // Both axes of the REAL available space are read here, once,
+            // and used to size the tray -- never assumed at a single
+            // evaluated height the way the old fixed-360dp L5 tray budget
+            // was (see chooseTrayColumns/MIN_CAR_CANVAS_HEIGHT KDoc below).
+            // The tray is capped to leave MIN_CAR_CANVAS_HEIGHT for the car
+            // and made scrollable, so a raised system Display size shrinks
+            // how much of the tray is visible at once -- never how big a
+            // button is, and never down to a 0dp car.
+            val unlocked = CarDesignState.unlockedItemsFor(level)
+            val maxColumns = min(MAX_TRAY_COLUMNS, unlocked.size).coerceAtLeast(1)
+            val columns = chooseTrayColumns(maxColumns, maxWidth)
+            val trayMaxHeight = (maxHeight - MIN_CAR_CANVAS_HEIGHT).coerceAtLeast(0.dp)
 
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = CAR_PADDING_DP, vertical = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                val carWidth = maxWidth
-                val carHeight = maxHeight
+            Column(modifier = Modifier.fillMaxSize()) {
+                ItemTray(
+                    unlocked = unlocked,
+                    columns = columns,
+                    maxHeight = trayMaxHeight,
+                    selected = state.selected,
+                    onSelect = { item ->
+                        state = state.selectItem(item)
+                        soundBank.play(SoundBank.Cue.TAP)
+                    },
+                )
 
-                Box(
+                BoxWithConstraints(
                     modifier = Modifier
-                        .size(carWidth, carHeight)
-                        .pointerInput(level) {
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = CAR_PADDING_DP, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val carWidth = maxWidth
+                    val carHeight = maxHeight
+
+                    Box(
+                        modifier = Modifier
+                            .size(carWidth, carHeight)
+                            .pointerInput(level) {
                             val widthPx = size.width.toFloat()
                             val heightPx = size.height.toFloat()
                             detectTapGestures { offset ->
@@ -143,100 +182,140 @@ object CarDesignGame : GameModule {
                                 lastTapFraction = Offset(fx, fy)
                                 tapTrigger += 1
 
-                                val isStickerRemoval = state.selected !is DesignItem.StickerShape &&
-                                    state.stickers.isNotEmpty() &&
-                                    nearestStickerWithin(state, fx, fy)
-                                val next = if (isStickerRemoval) {
-                                    state.removeStickerNear(fx, fy)
-                                } else {
-                                    state.applyAt(fx, fy)
-                                }
-                                if (next != state) {
-                                    state = next
-                                    soundBank.play(SoundBank.Cue.SUCCESS)
-                                    sparkling = true
-                                }
-                            }
-                        },
-                ) {
-                    CarCanvas(state = state)
-                    TapEffect(point = lastTapFraction, trigger = tapTrigger)
-                }
+                                // The sticker's REAL on-screen half-size
+                                // (see CarCanvas: `size = min(w,h) * 0.16f`),
+                                // converted to a per-axis fractional radius
+                                // so the hit zone matches the drawn shape's
+                                // actual dp bounds rather than an isotropic
+                                // circle that becomes an elongated ellipse
+                                // on a non-square canvas.
+                                val halfSizePx = min(widthPx, heightPx) * 0.08f
+                                val radiusX = halfSizePx / widthPx
+                                val radiusY = halfSizePx / heightPx
 
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Celebration(visible = sparkling)
-                }
-                LaunchedEffect(tapTrigger) {
-                    if (tapTrigger > 0) {
-                        delay(260L)
-                        sparkling = false
+                                    val touchesSticker = state.selected !is DesignItem.StickerShape &&
+                                        state.stickers.isNotEmpty() &&
+                                        state.stickerNear(fx, fy, radiusX, radiusY)
+
+                                    // A tap on a sticker with a non-sticker
+                                    // tool equipped is never a pure loss: it
+                                    // removes the sticker AND applies the
+                                    // equipped tool, so the child's tap
+                                    // always does what they asked (change
+                                    // the colour/wheel/shape) even when it
+                                    // also clears a sticker out of the way.
+                                    var next = state
+                                    if (touchesSticker) {
+                                        next = next.removeStickerNear(fx, fy, radiusX, radiusY)
+                                    }
+                                    next = next.applyAt(fx, fy)
+
+                                    if (next != state) {
+                                        state = next
+                                        soundBank.play(SoundBank.Cue.SUCCESS)
+                                    }
+                                }
+                            },
+                    ) {
+                        CarCanvas(state = state)
+                        TapEffect(point = lastTapFraction, trigger = tapTrigger)
                     }
                 }
             }
+
+            Celebration(visible = celebrating, big = level == 5)
         }
     }
 
     private const val SANDBOX_MILLIS = 180_000L
 }
 
-/**
- * A tap directly ON an existing sticker while a NON-sticker tool is equipped
- * removes that sticker -- this is the child's only way to take one back off
- * the car, echoing [CarDesignState.removeStickerNear]'s own tolerance.
- */
-private fun nearestStickerWithin(state: CarDesignState, x: Float, y: Float): Boolean =
-    state.stickers.any { s ->
-        val dx = s.x - x
-        val dy = s.y - y
-        (dx * dx + dy * dy) <= REMOVE_RADIUS * REMOVE_RADIUS
-    }
-
-private const val REMOVE_RADIUS = 0.08f
-
 // --- Layout budget -------------------------------------------------------
-// Worked against the worst case: a 360dp-wide phone, level 5's full 19-item
-// tray (8 paint + 3 wheel + 4 sticker + 4 body-shape -- the largest tray any
-// level shows).
+// Fixed-height budgets evaluated at a single screen size cannot survive a
+// raised system Display (font/density) size, which shrinks a phone's own dp
+// dimensions without shrinking any dp-fixed constant a game applies on top
+// (the shell's 96dp exit zone, this module's own tray rows). The old
+// "5 rows * 64dp = 360dp, so the car gets ~496-360=136dp" comment was true
+// at exactly one height; one Display-size step out it left a 0dp car.
 //
-// Tray, per row: 3 items * 64dp KidButtons + 2 gaps * 8dp + 2 * 12dp row
-// padding = 192 + 16 + 24 = 232dp <= 360dp, matching carwash's own
-// per-row math with slack to spare. 19 items wrap onto ceil(19/3) = 7 rows.
-// Tray block height: 7 rows * 64dp + 6 gaps * 8dp + 2 * 8dp column padding
-// = 448 + 48 + 16 = 512dp -- THIS EXCEEDS the ~496dp the shell hands us
-// after safeDrawing + the 96dp exit strip, so level 5's tray alone would
-// force a scroll, which is banned outright.
+// So neither axis is assumed here. [chooseTrayColumns] is a pure function
+// (see [CarDesignGameLayoutTest], which calls this SAME function against
+// real screen configurations) that picks the widest column count that still
+// holds every button at the [MinTapTarget] floor for the REAL available
+// width. [MIN_CAR_CANVAS_HEIGHT] is reserved for the car FIRST -- the tray
+// gets whatever is left, capped to that budget and scrollable -- so the car
+// canvas can shrink but can never be squeezed to 0dp by a tall tray.
 //
-// Fix: widen the row to 5-per-row instead of 3. 5 * 64dp + 4 gaps * 8dp +
-// 2 * 12dp row padding = 320 + 32 + 24 = 376dp -- still 16dp over a strict
-// 360dp floor. Since KidButton's icons need no horizontal margin beyond the
-// button's own bounds, row padding is trimmed to 6dp each side for the tray
-// only (identical KidButtons, just tighter row insets): 320 + 32 + 12 =
-// 364dp -- still 4dp over. Dropping the inter-item gap to 6dp instead of 8dp
-// closes it: 320 + 4*6 + 12 = 356dp <= 360dp.
+// MIN_CAR_CANVAS_HEIGHT = 100dp: derived from [CarCanvas]'s own proportions
+// once wheels scale off `min(w, h)` (see H1's fix below) rather than width
+// alone -- at 100dp the body band is ~36dp tall and each wheel ~18dp across,
+// a legible two-tone car with visible wheels and a windshield, not a
+// distortion. Below that the body band drops under ~30dp and the roof/cab
+// details drawn as fixed fractions of height stop reading as anything.
 //
-// At 5-per-row, 19 items wrap onto ceil(19/5) = 4 rows. Tray block height:
-// 4 rows * 64dp + 3 gaps * 6dp + 2 * 8dp column padding = 256 + 18 + 16 =
-// 290dp. Levels 1-4 have fewer rows (1, 2, 3, 3 respectively), so their tray
-// is never taller. The car canvas below gets whatever `maxHeight`
-// BoxWithConstraints reports once the tray is laid out -- never assumed:
-// worst case leaves roughly 496 - 290 = 206dp of height, which combined with
-// the full 360 - 2*16 = 328dp of width is enough to draw a small car
-// legibly. Nothing here scrolls at any level.
-private const val ITEMS_PER_TRAY_ROW = 5
-private val TRAY_ROW_SPACING_DP = 6.dp
-private val TRAY_ROW_PADDING_DP = 6.dp
+// Required row width for n columns = 2*TRAY_COLUMN_PADDING_DP +
+// 2*TRAY_ROW_PADDING_DP + n*64dp + (n-1)*TRAY_ROW_SPACING_DP. At n=5, 5*64dp
+// already equals the smallest supported screen width (320dp) with nothing
+// left for padding or gaps, so 5-per-row can never hold the floor at 320dp;
+// [chooseTrayColumns] therefore never returns more than 4 on a phone-width
+// screen, and drops to 3 or fewer as width shrinks further (see the layout
+// test for the exact 1.3x-Display case, where width alone forces 3).
+//
+// Every button that IS shown is always exactly [MinTapTarget] (KidButton's
+// `defaultMinSize` floor; nothing in this tray ever asks a button to be
+// smaller). What changes with configuration is only how many rows are
+// visible without scrolling and how tall the car canvas is -- never the
+// button size and never the item count (level 5 always offers all 19 tools;
+// see [CarDesignState.totalItemCountFor]'s literal invariant test).
+private val TRAY_ROW_SPACING_DP = 8.dp
+private val TRAY_ROW_GAP_DP = 6.dp
+private val TRAY_ROW_PADDING_DP = 8.dp
 private val TRAY_COLUMN_PADDING_DP = 8.dp
 private val CAR_PADDING_DP = 16.dp
+private val MIN_CAR_CANVAS_HEIGHT = 100.dp
+private const val MAX_TRAY_COLUMNS = 5
+
+/** The dp width a row of [columns] 64dp buttons needs, including all padding on both sides. */
+internal fun requiredTrayRowWidth(columns: Int): Dp =
+    TRAY_COLUMN_PADDING_DP * 2 + TRAY_ROW_PADDING_DP * 2 +
+        MinTapTarget * columns + TRAY_ROW_SPACING_DP * (columns - 1).coerceAtLeast(0)
+
+/**
+ * Picks the largest column count (capped at [maxColumns], walked down to 1)
+ * whose row still fits [availableWidth] without any button dropping under
+ * [MinTapTarget]. Never assumes a fixed screen width -- see the layout
+ * budget comment above and [CarDesignGameLayoutTest].
+ */
+internal fun chooseTrayColumns(maxColumns: Int, availableWidth: Dp): Int {
+    for (candidate in maxColumns downTo 1) {
+        if (requiredTrayRowWidth(candidate) <= availableWidth) return candidate
+    }
+    return 1
+}
+
+/** The tray's own content height at [columns] columns showing [itemCount] items, before any scroll clipping. */
+internal fun trayContentHeight(itemCount: Int, columns: Int): Dp {
+    val rows = ceil(itemCount / columns.toFloat()).toInt().coerceAtLeast(1)
+    return MinTapTarget * rows + TRAY_ROW_GAP_DP * (rows - 1).coerceAtLeast(0) + TRAY_COLUMN_PADDING_DP * 2
+}
 
 @Composable
-private fun ItemTray(unlocked: List<DesignItem>, selected: DesignItem, onSelect: (DesignItem) -> Unit) {
+private fun ItemTray(
+    unlocked: List<DesignItem>,
+    columns: Int,
+    maxHeight: Dp,
+    selected: DesignItem,
+    onSelect: (DesignItem) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(max = maxHeight)
+            .verticalScroll(rememberScrollState())
             .padding(TRAY_COLUMN_PADDING_DP),
-        verticalArrangement = Arrangement.spacedBy(TRAY_ROW_SPACING_DP),
+        verticalArrangement = Arrangement.spacedBy(TRAY_ROW_GAP_DP),
     ) {
-        unlocked.chunked(ITEMS_PER_TRAY_ROW).forEach { rowItems ->
+        unlocked.chunked(columns).forEach { rowItems ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -262,27 +341,76 @@ private fun ItemButton(item: DesignItem, isSelected: Boolean, onClick: () -> Uni
                 .size(MinTapTarget * 0.72f)
                 .clip(CircleShape)
                 .background(
-                    itemColor(item).copy(alpha = if (isSelected) 1f else 0.5f),
+                    itemColor(item, isSelected),
                     CircleShape,
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            ItemGlyph(item = item)
+            ItemGlyph(item = item, markerColor = markerColorFor(item, isSelected))
         }
     }
 }
 
 /**
- * The colour behind each tray button -- purely decorative for wheels,
- * stickers and body shapes (which use neutral tones), and the actual paint
- * colour for [DesignItem.PaintColor]. Colour is never the ONLY signal: see
- * [ItemGlyph] for the marker every item also carries.
+ * The fully-opaque colour a tray button's swatch is based on -- purely
+ * decorative for wheels, stickers and body shapes (which use neutral
+ * tones), and the actual paint colour for [DesignItem.PaintColor]. Used
+ * both to derive the displayed swatch (see [itemColor]) and to pick a
+ * contrast-aware marker colour (see [markerColorFor]), so a marker is
+ * always chosen against the colour it will actually sit on, never a
+ * post-alpha-blend approximation.
  */
-private fun itemColor(item: DesignItem): Color = when (item) {
+private fun itemBaseColor(item: DesignItem): Color = when (item) {
     is DesignItem.PaintColor -> paintPalette[item.paletteIndex % paintPalette.size]
-    is DesignItem.WheelStyle -> KidPalette.OnSurface.copy(alpha = 0.35f)
-    is DesignItem.StickerShape -> KidPalette.Yellow.copy(alpha = 0.5f)
-    is DesignItem.BodyShapeItem -> KidPalette.Blue.copy(alpha = 0.35f)
+    is DesignItem.WheelStyle -> KidPalette.OnSurface
+    is DesignItem.StickerShape -> KidPalette.Yellow
+    is DesignItem.BodyShapeItem -> KidPalette.Blue
+}
+
+/**
+ * The colour actually painted behind a tray button. Selection is
+ * communicated by MULTIPLYING the base alpha (never `Color.copy(alpha =)`
+ * replacing it outright -- that was the bug that turned a selected wheel
+ * button fully opaque black, erasing the same-colour marker drawn on top
+ * of it). A selected item is always more opaque than an unselected one,
+ * but never opaque enough to make its own marker unreadable.
+ */
+private fun itemColor(item: DesignItem, isSelected: Boolean): Color {
+    val base = itemBaseColor(item)
+    val baseAlpha = when (item) {
+        is DesignItem.PaintColor -> 1f
+        is DesignItem.WheelStyle -> 0.55f
+        is DesignItem.StickerShape -> 0.6f
+        is DesignItem.BodyShapeItem -> 0.55f
+    }
+    val selectionAlpha = if (isSelected) 1f else 0.6f
+    return base.copy(alpha = (base.alpha * baseAlpha * selectionAlpha).coerceIn(0.2f, 1f))
+}
+
+/**
+ * A marker colour with adequate contrast against what a tray button ACTUALLY
+ * renders -- [itemColor]'s base swatch alpha-blended over [KidButton]'s
+ * white surface, AT THE ALPHA [isSelected] ACTUALLY SHIPS (H2: deciding
+ * against the opaque base colour picked a marker that often had no relation
+ * to the pale, alpha-blended swatch a child actually sees -- level 5's blue
+ * body-shape glyph rendered as a near-blank white circle because a light
+ * marker was chosen against opaque blue while the screen only ever shows
+ * blue at 33%-55% alpha over white).
+ *
+ * Deliberately decided PER SELECTION STATE rather than once for both: some
+ * swatches (purple is the concrete case, pinned in the state test) have no
+ * single marker colour that clears the 3:1 floor at both the selected
+ * (near-opaque) and unselected (much paler) alpha -- a fully-opaque purple
+ * needs a light marker, the same purple at 60% alpha over white is pale
+ * enough that only a dark marker holds the floor. The item's marker SHAPE
+ * never changes across selection (see [ItemGlyph]/[CarDesignState]'s
+ * distinctness tests), only its colour, so identity is never lost.
+ */
+private fun markerColorFor(item: DesignItem, isSelected: Boolean): Color {
+    val base = itemBaseColor(item)
+    val alpha = itemColor(item, isSelected).alpha
+    val light = CarDesignState.isLightMarkerNeededComposited(base.red, base.green, base.blue, listOf(alpha))
+    return if (light) Color(0xFFF5F5F5) else Color(0xFF2A2A2A)
 }
 
 /**
@@ -304,11 +432,11 @@ private val paintPalette: List<Color> = KidPalette.Swatch + Color(0xFF00897B)
  * - body shapes: a different outline per shape (sedan, van, round, pickup).
  */
 @Composable
-private fun ItemGlyph(item: DesignItem) {
+private fun ItemGlyph(item: DesignItem, markerColor: Color) {
     Canvas(modifier = Modifier.size(MinTapTarget * 0.4f)) {
         val w = size.width
         val h = size.height
-        val markColor = KidPalette.OnSurface.copy(alpha = 0.85f)
+        val markColor = markerColor
         when (item) {
             is DesignItem.PaintColor -> drawPaintMarker(item.paletteIndex, w, h, markColor)
             is DesignItem.WheelStyle -> drawWheelMarker(item.paletteIndex, w, h, markColor)
@@ -324,13 +452,17 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPaintMarker(
     h: Float,
     color: Color,
 ) {
-    when (index % 8) {
+    when (CarDesignState.paintMarkerShapeId(index)) {
         0 -> drawCircle(color = color, radius = min(w, h) * 0.4f, center = Offset(w / 2f, h / 2f))
         1 -> drawRect(color = color, topLeft = Offset(w * 0.15f, h * 0.15f), size = Size(w * 0.7f, h * 0.7f))
         2 -> drawPath(regularPolygonPath(w, h, sides = 3), color = color)
         3 -> drawPath(diamondPath(w, h), color = color)
         4 -> drawPath(starPath(w, h, points = 5), color = color)
-        5 -> drawPath(regularPolygonPath(w, h, sides = 6), color = color)
+        // A RING, not a hexagon: at the ~24dp glyph size a filled hexagon
+        // (6 sides) and the pentagon below it (5 sides) read as the same
+        // blob (M4) -- an open ring is unmistakably different from every
+        // other filled shape in this set regardless of how small it draws.
+        5 -> drawCircle(color = color, radius = min(w, h) * 0.4f, center = Offset(w / 2f, h / 2f), style = Stroke(width = min(w, h) * 0.18f))
         6 -> drawCrossMarker(w, h, color)
         else -> drawPath(regularPolygonPath(w, h, sides = 5), color = color)
     }
@@ -345,7 +477,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWheelMarker(
     val center = Offset(w / 2f, h / 2f)
     val radius = min(w, h) * 0.42f
     drawCircle(color = color, radius = radius, center = center, style = Stroke(width = w * 0.1f))
-    val spokes = 3 + index
+    val spokes = CarDesignState.wheelSpokeCount(index)
     for (i in 0 until spokes) {
         val angle = i * (2 * PI / spokes)
         val end = Offset(center.x + (radius * cos(angle)).toFloat(), center.y + (radius * sin(angle)).toFloat())
@@ -359,7 +491,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStickerShape(
     h: Float,
     color: Color,
 ) {
-    when (index % 4) {
+    when (CarDesignState.stickerMarkerShapeId(index)) {
         0 -> drawPath(starPath(w, h, points = 5), color = color)
         1 -> drawPath(heartPath(w, h), color = color)
         2 -> drawPath(flowerPath(w, h), color = color)
@@ -373,7 +505,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBodyShapeMarker
     h: Float,
     color: Color,
 ) {
-    when (index % 4) {
+    when (CarDesignState.bodyMarkerShapeId(index)) {
         0 -> drawRoundRect(color = color, topLeft = Offset(w * 0.1f, h * 0.3f), size = Size(w * 0.8f, h * 0.4f), cornerRadius = CornerRadius(w * 0.08f))
         1 -> drawRoundRect(color = color, topLeft = Offset(w * 0.08f, h * 0.18f), size = Size(w * 0.84f, h * 0.55f), cornerRadius = CornerRadius(w * 0.15f))
         2 -> drawCircle(color = color, radius = min(w, h) * 0.4f, center = Offset(w / 2f, h / 2f), style = Stroke(width = w * 0.1f))
@@ -545,7 +677,13 @@ private fun CarCanvas(state: CarDesignState) {
             cornerRadius = CornerRadius(w * 0.02f),
         )
 
-        val wheelRadius = w * 0.09f
+        // Derived from the SMALLER of the two canvas dimensions (H1: a
+        // width-only radius made the wheels 1.4x taller than the body and
+        // clipped past the bottom edge on the short, wide canvas a tight
+        // tray budget produces). Capped against the body band's own height
+        // so a wheel can never dwarf the body it is attached to, at any
+        // canvas shape this module can measure.
+        val wheelRadius = (min(w, h) * 0.09f).coerceAtMost((bodyBottom - bodyTop) * 0.55f)
         val wheelStyle = state.wheelStyleIndex
         listOf(w * 0.26f, w * 0.74f).forEach { cx ->
             val center = Offset(cx, bodyBottom)

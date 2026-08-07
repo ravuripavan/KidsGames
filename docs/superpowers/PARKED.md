@@ -311,6 +311,76 @@ another pass.
 
 ---
 
+## `:games:cardesign` — parked 2026-08-07
+
+Three review rounds, three fix rounds. Builds green, 34 tests pass, the state machine
+is clean, and the module gets a great deal right. Level 5 does not work on a stock
+phone, and levels 4 and 5 lose their headline content at any raised Display size.
+
+**What works, and it is substantial.** Tap-to-equip then tap-to-apply, chosen
+deliberately over drag-and-drop by citing the two modules parked for drag defects —
+the first time a lesson in this project prevented a defect rather than being
+rediscovered. A sticker tap with a non-sticker tool both removes the sticker AND
+applies the tool, so no tap is ever a pure loss. Marker contrast is computed against
+the actual alpha-blended-over-white colour in both selection states, and every one
+of eleven cases clears 3:1 — verified independently. The contrast test now matches
+the real palette byte-for-byte. Completion fires and provably cannot fire
+backgrounded. `currentStateFlow` is hoisted, so this module is out of the observer
+leak. No text, permissions, network, or microphone; no fail states; literal tool
+counts.
+
+**Why it is parked.**
+
+**B1 — the tool tray scrolls with no discoverable cue.** Round 3 protected the car
+by reserving its floor first and letting the tray scroll into the remainder. There is
+no scrollbar, no edge fade, no arrow, no hint. At a 1.3x Display size on level 5, 19
+tools become 7 rows of 3 in a 216.3dp tray, and row 4's top edge falls at 218dp —
+exactly zero pixels of it render. The child sees eight paint colours and one wheel;
+two wheel styles, all four stickers and all four body shapes are below the fold. At
+1.15x it is worse in kind: row 4 renders 62.5 of its 64dp, so the tray LOOKS complete
+while row 5 is entirely invisible.
+
+This is `:games:colorsort`'s parking condition, with one aggravating difference.
+colorsort scrolled *content*; this scrolls *controls*. The rule this project settled
+on is that content may scroll and controls may not, and a tray of paint, wheels,
+stickers and body shapes is the control surface.
+
+The round-3 change traded a measurable defect (a 0dp canvas) for an unmeasurable one
+(unreachable controls), and the new layout test asserts only the car floor — never
+that the tray is fully visible. Its own four passing cases include configurations
+where the tray is clipped, and it says nothing about them.
+
+**B2 — the car is a stripe at the default configuration.** `MIN_CAR_CANVAS_HEIGHT`
+is 100dp, but the module applies 16dp of its own vertical padding INSIDE the weighted
+box, so the drawing canvas at the floor is 84dp. Nothing bounds the aspect ratio —
+the floor constrains height only, and width is whatever the screen gives. At
+360x640, level 5, default Display size, the car is a body 288dp long and 32dp tall
+(9:1) with two 16dp wheels: a coloured bar with two dots.
+
+The consequences follow the levels. Level 3 exists to choose a wheel style, and the
+spokes draw at 1.4dp inside a 7.9dp radius, so switching styles changes nothing
+visible. Level 5 exists to choose a body shape, and sedan, van, bug and pickup are
+all keyed off fractions of an 84dp height with an 18dp roof band.
+
+The KDoc defending the 100dp figure states a 36dp body and 18dp wheels. The code
+beneath it produces 30dp and 15dp, because the calculation omits the module's own
+padding — the same shape of error that parked `musicpad` and `countanimals`: a stated
+derivation that does not match the code it defends.
+
+**What it needs.** Two product decisions, which is why it parks rather than taking a
+fourth round. What does level 5 give up on a short screen — fewer tools on offer at
+once, a paged tray with a visible affordance, or a smaller tool footprint? And how
+wide may the car be — an aspect-ratio bound would fix B2, but it costs either width
+or the tray's space, so it interacts with the first question.
+
+**One finding worth carrying regardless.** Selection state in the tray is carried by
+opacity alone (1.0 vs 0.6 for paint, 0.55 vs 0.33 for wheels and body shapes). There
+is no ring, border, scale-pop or checkmark. For wheels and body shapes the difference
+is two pale greys, which makes alpha the sole carrier of a meaningful state — the one
+thing the palette rule says never to do.
+
+---
+
 ## Cross-cutting issues found while reviewing (not module defects)
 
 **Nothing in the app makes a sound, and nothing ever has.** `SoundBank.resourceFor`

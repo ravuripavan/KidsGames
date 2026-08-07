@@ -80,25 +80,38 @@ data class CarDesignState(
     }
 
     /**
-     * Removes the sticker nearest to ([x], [y]) if it is within
-     * [REMOVE_RADIUS] fractional units -- this is the ONLY way any sticker
-     * ever leaves [stickers]. A tap that lands near no sticker is a no-op,
-     * never a fail state.
+     * Removes the sticker nearest to ([x], [y]) if it is within the given
+     * per-axis tolerance -- this is the ONLY way any sticker ever leaves
+     * [stickers]. A tap that lands near no sticker is a no-op, never a fail
+     * state.
+     *
+     * [radiusX]/[radiusY] are fractional, one per axis, so the caller can
+     * pass a hit zone that matches the sticker's REAL on-screen bounds
+     * (the canvas is rarely square, so a single isotropic radius in
+     * fractional space becomes an elongated ellipse in dp -- see
+     * [nearestStickerWithin] in the Composable, which computes these from
+     * the actual measured canvas size).
      */
-    fun removeStickerNear(x: Float, y: Float): CarDesignState {
-        val nearest = stickers.minByOrNull { s ->
-            val dx = s.x - x
-            val dy = s.y - y
-            dx * dx + dy * dy
-        } ?: return this
-        val dx = nearest.x - x
-        val dy = nearest.y - y
-        return if (dx * dx + dy * dy <= REMOVE_RADIUS * REMOVE_RADIUS) {
-            copy(stickers = stickers.filterNot { it.id == nearest.id })
-        } else {
-            this
-        }
+    fun removeStickerNear(x: Float, y: Float, radiusX: Float, radiusY: Float): CarDesignState {
+        val nearest = stickers
+            .map { s ->
+                val dx = (s.x - x) / radiusX
+                val dy = (s.y - y) / radiusY
+                s to (dx * dx + dy * dy)
+            }
+            .filter { (_, distanceSquared) -> distanceSquared <= 1f }
+            .minByOrNull { (_, distanceSquared) -> distanceSquared }
+            ?.first ?: return this
+        return copy(stickers = stickers.filterNot { it.id == nearest.id })
     }
+
+    /** True if some sticker's real bounds (per-axis [radiusX]/[radiusY]) contain ([x], [y]). */
+    fun stickerNear(x: Float, y: Float, radiusX: Float, radiusY: Float): Boolean =
+        stickers.any { s ->
+            val dx = (s.x - x) / radiusX
+            val dy = (s.y - y) / radiusY
+            dx * dx + dy * dy <= 1f
+        }
 
     private fun isUnlocked(item: DesignItem): Boolean = when (item) {
         is DesignItem.PaintColor -> item.paletteIndex < paintColorCountFor(level)
@@ -108,7 +121,75 @@ data class CarDesignState(
     }
 
     companion object {
-        private const val REMOVE_RADIUS = 0.08f
+        /**
+         * The marker shape id an item's [DesignItem.paletteIndex] maps to
+         * within its own category -- the SAME mapping the Composable's
+         * `ItemGlyph` uses to pick which shape to draw, extracted here as a
+         * pure function so distinctness can be verified without an
+         * emulator (see the state test).
+         */
+        fun paintMarkerShapeId(index: Int): Int = index % 8
+
+        fun wheelSpokeCount(index: Int): Int = 3 + index
+
+        fun stickerMarkerShapeId(index: Int): Int = index % 4
+
+        fun bodyMarkerShapeId(index: Int): Int = index % 4
+
+        /**
+         * True if a marker needs to be LIGHT to stay legible against a
+         * swatch of the given approximate luminance (0f..1f, weighted-RGB) --
+         * a dark marker on a dark swatch (e.g. the purple swatch, M2) is
+         * under the 3:1 contrast floor, so this flips the marker colour
+         * rather than keeping a single fixed dark tone everywhere. Kept for
+         * callers that only ever see an opaque colour; tray buttons never
+         * render one (see [isLightMarkerNeededComposited]).
+         */
+        fun isLightMarkerNeeded(luminance: Float): Boolean = luminance <= 0.55f
+
+        private const val DARK_MARKER = 0x2A / 255f
+        private const val LIGHT_MARKER = 0xF5 / 255f
+
+        private fun srgbToLinear(c: Float): Float =
+            if (c <= 0.03928f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+
+        private fun relativeLuminance(r: Float, g: Float, b: Float): Float =
+            0.2126f * srgbToLinear(r) + 0.7152f * srgbToLinear(g) + 0.0722f * srgbToLinear(b)
+
+        private fun contrastRatio(l1: Float, l2: Float): Float {
+            val lighter = maxOf(l1, l2)
+            val darker = minOf(l1, l2)
+            return (lighter + 0.05f) / (darker + 0.05f)
+        }
+
+        private fun compositeOverWhite(base: Float, alpha: Float): Float = base * alpha + 1f * (1f - alpha)
+
+        /**
+         * True if a LIGHT marker gives a better worst-case WCAG contrast
+         * ratio than a dark one, against the base swatch ([baseR]/[baseG]/
+         * [baseB], each 0f..1f) alpha-blended over a white surface at every
+         * alpha in [alphas] -- i.e. what a tray button ACTUALLY renders at
+         * each selection state, not the opaque swatch alone (H2). Picks the
+         * single direction that maximises the MINIMUM contrast across every
+         * alpha given, so one marker colour stays legible whether or not the
+         * item is currently selected.
+         */
+        fun isLightMarkerNeededComposited(baseR: Float, baseG: Float, baseB: Float, alphas: List<Float>): Boolean {
+            val darkLuminance = relativeLuminance(DARK_MARKER, DARK_MARKER, DARK_MARKER)
+            val lightLuminance = relativeLuminance(LIGHT_MARKER, LIGHT_MARKER, LIGHT_MARKER)
+            var worstDark = Float.MAX_VALUE
+            var worstLight = Float.MAX_VALUE
+            for (alpha in alphas) {
+                val bgLuminance = relativeLuminance(
+                    compositeOverWhite(baseR, alpha),
+                    compositeOverWhite(baseG, alpha),
+                    compositeOverWhite(baseB, alpha),
+                )
+                worstDark = minOf(worstDark, contrastRatio(bgLuminance, darkLuminance))
+                worstLight = minOf(worstLight, contrastRatio(bgLuminance, lightLuminance))
+            }
+            return worstLight > worstDark
+        }
 
         /** 4 colours at L1, 8 from L2 onward. */
         fun paintColorCountFor(level: Int): Int = if (level <= 1) 4 else 8
