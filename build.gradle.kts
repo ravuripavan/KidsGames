@@ -53,7 +53,12 @@ val verifyDesignSpecGate = tasks.register("verifyDesignSpecGate") {
                                     }
                                 }
                                 file.extension == "kt" -> {
+                                    // Strip comments first. KDoc that explains this very
+                                    // rule contains `Text("...")` and would otherwise fail
+                                    // the gate — the check must read code, not prose.
                                     val text = file.readText()
+                                        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+                                        .replace(Regex("""//[^\n]*"""), "")
                                     // Text("literal") or Text(text = "literal")
                                     val textCallWithLiteral = Regex(
                                         """\bText\s*\(\s*(text\s*=\s*)?"[^"]*"""",
