@@ -579,19 +579,28 @@ private fun NumeralPicker(options: List<Int>, wobbleTrigger: Int, modifier: Modi
                     // information as the numeral above it already gives --
                     // never more, so it doesn't leak which option is correct.
                     //
-                    // 12dp pips (not the old 8dp) grouped 5+5 with an extra
-                    // gap between the groups -- ten 8dp pips at 4dp spacing
-                    // read as one dashed bar, not ten countable things.
-                    Row(
+                    // 12dp pips in rows of at most FIVE, stacked. Ten pips on
+                    // one row is 186dp wide, and three options then need 536dp
+                    // against ~288dp of screen -- the outer digits clip off
+                    // both edges. Stacking keeps the pips big enough to count
+                    // (8dp on one row reads as a dashed bar) while capping the
+                    // widest option at 5 pips:
+                    //   5 * 12dp + 4 * 6dp gaps = 84dp
+                    //   3 options: 3 * 84 + 2 * 16dp = 284dp, inside 288dp.
+                    Column(
                         modifier = Modifier.padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        val firstGroup = numeral.coerceAtMost(5)
-                        val secondGroup = (numeral - 5).coerceAtLeast(0)
-                        repeat(firstGroup) { Pip(filled = true, size = 12.dp) }
-                        if (secondGroup > 0) {
-                            Box(modifier = Modifier.size(width = 6.dp, height = 12.dp))
-                            repeat(secondGroup) { Pip(filled = true, size = 12.dp) }
+                        val firstRow = numeral.coerceAtMost(5)
+                        val secondRow = (numeral - 5).coerceAtLeast(0)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            repeat(firstRow) { Pip(filled = true, size = 12.dp) }
+                        }
+                        if (secondRow > 0) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                repeat(secondRow) { Pip(filled = true, size = 12.dp) }
+                            }
                         }
                     }
                 }
