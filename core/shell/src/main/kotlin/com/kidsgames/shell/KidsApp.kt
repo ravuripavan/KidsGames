@@ -40,9 +40,10 @@ import kotlinx.coroutines.launch
  * itself: the space they are laid out in is already safe.
  */
 @Composable
-fun KidsApp(registry: GameRegistry, progressStore: ProgressStore) {
+fun KidsApp(registry: GameRegistry, progressStore: ProgressStore, onExitApp: () -> Unit = {}) {
     var activeGame by remember { mutableStateOf<GameModule?>(null) }
     var activeLevel by remember { mutableStateOf(1) }
+    var sessionState by remember { mutableStateOf(SessionState()) }
     val scope = rememberCoroutineScope()
     val safeAreaModifier = Modifier
         .fillMaxSize()
@@ -50,12 +51,18 @@ fun KidsApp(registry: GameRegistry, progressStore: ProgressStore) {
 
     val game = activeGame
     if (game == null) {
+        val suggestedGame = remember(registry.games, sessionState) {
+            SessionOrchestrator.suggestNext(registry.games, sessionState)
+        }
         PickerScreen(
             registry = registry,
+            suggestedGameId = suggestedGame?.id,
+            onExitApp = onExitApp,
             onGameSelected = { selected ->
                 scope.launch {
                     activeLevel = progressStore.levelFor(selected.id)
                     activeGame = selected
+                    sessionState = sessionState.copy(lastPlayedId = selected.id)
                 }
             },
             modifier = safeAreaModifier,
@@ -73,6 +80,7 @@ fun KidsApp(registry: GameRegistry, progressStore: ProgressStore) {
                 scope.launch {
                     progressStore.recordCompletion(game.id, activeLevel)
                 }
+                sessionState = sessionState.copy(playedIds = sessionState.playedIds + game.id)
             }
             activeGame = null
         }

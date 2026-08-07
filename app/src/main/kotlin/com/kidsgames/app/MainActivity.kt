@@ -17,7 +17,7 @@ class MainActivity : ComponentActivity() {
         val progressStore = ProgressStore(applicationContext)
 
         setContent {
-            KidsApp(registry = registry, progressStore = progressStore)
+            KidsApp(registry = registry, progressStore = progressStore, onExitApp = { finish() })
         }
     }
 }

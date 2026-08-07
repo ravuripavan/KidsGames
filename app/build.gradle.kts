@@ -19,6 +19,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Personal-use sideload only — no Play Store release, so the
+            // debug keystore is signed against directly rather than
+            // provisioning a dedicated release key nobody else needs.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -37,8 +41,15 @@ dependencies {
     implementation(project(":core:designkit"))
     implementation(project(":core:shell"))
 
-    // Games. The remaining thirteen are added in Phase 3, once built.
+    // Games. Seven modules cleared review (see docs/superpowers/PARKED.md for the
+    // six still parked and talktime, which awaits a confirming review).
     implementation(project(":games:popballoons"))
+    implementation(project(":games:patterns"))
+    implementation(project(":games:matchshapes"))
+    implementation(project(":games:carrace"))
+    implementation(project(":games:memorypairs"))
+    implementation(project(":games:carwash"))
+    implementation(project(":games:tracelines"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
