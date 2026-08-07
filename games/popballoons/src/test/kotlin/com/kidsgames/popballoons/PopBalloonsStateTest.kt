@@ -30,35 +30,88 @@ class PopBalloonsStateTest {
 
     @Test
     fun `popping every balloon completes the level`() {
-        val s = PopBalloonsState(level = 1)
-        s.balloons.toList().forEach { s.pop(it.id) }
+        var s = PopBalloonsState(level = 1)
+        s.balloons.map { it.id }.forEach { s = s.pop(it) }
         assertTrue(s.isComplete)
+    }
+
+    @Test
+    fun `pop does not mutate the state it was called on`() {
+        val s = PopBalloonsState(level = 1)
+        val target = s.balloons.first()
+        s.pop(target.id)
+        // the original reference must be untouched -- pop() is pure
+        assertFalse(s.balloons.first { it.id == target.id }.popped)
     }
 
     @Test
     fun `popping the wrong colour at level four does not end play`() {
         val s = PopBalloonsState(level = 4)
         val wrong = s.balloons.first { it.color != s.targetColor }
-        s.pop(wrong.id)
-        assertFalse(s.isComplete)
-        assertEquals(0, s.penalties)   // there is no such thing as a penalty
+        val next = s.pop(wrong.id)
+        assertFalse(next.isComplete)
+        assertEquals(0, next.penalties)   // there is no such thing as a penalty
     }
 
     @Test
     fun `popping the wrong colour at level four does not pop the balloon`() {
         val s = PopBalloonsState(level = 4)
         val wrong = s.balloons.first { it.color != s.targetColor }
-        s.pop(wrong.id)
-        assertFalse(s.balloons.first { it.id == wrong.id }.popped)
+        val next = s.pop(wrong.id)
+        assertFalse(next.balloons.first { it.id == wrong.id }.popped)
     }
 
     @Test
     fun `popping the target colour at level four pops it and never regresses`() {
-        val s = PopBalloonsState(level = 4)
+        var s = PopBalloonsState(level = 4)
         val targetColor = s.targetColor
-        s.balloons.filter { it.color == targetColor }.forEach { s.pop(it.id) }
+        s.balloons.filter { it.color == targetColor }.map { it.id }.forEach { s = s.pop(it) }
         assertTrue(s.isComplete)
         assertEquals(0, s.penalties)
+    }
+
+    @Test
+    fun `completing level four leaves no untouched balloons on screen`() {
+        var s = PopBalloonsState(level = 4)
+        val targetColor = s.targetColor
+        s.balloons.filter { it.color == targetColor }.map { it.id }.forEach { s = s.pop(it) }
+        assertTrue(s.isComplete)
+        // decoy balloons must auto-clear once the target group empties --
+        // completion has to look like completion, not a frozen board with
+        // untouched balloons still showing.
+        assertTrue(s.balloons.all { it.popped })
+    }
+
+    @Test
+    fun `level four requires at least as many pops as level three`() {
+        val level3Pops = PopBalloonsState(level = 3).balloons.size
+        val s = PopBalloonsState(level = 4)
+        val level4RequiredPops = s.balloons.count { it.color == s.targetColor }
+        assertTrue(
+            "level 4 required $level4RequiredPops pops, level 3 required $level3Pops; " +
+                "level 4 must not be easier than level 3",
+            level4RequiredPops >= level3Pops,
+        )
+    }
+
+    @Test
+    fun `required pops are non-decreasing across levels one through five`() {
+        fun requiredPops(level: Int): Int {
+            val s = PopBalloonsState(level)
+            return when (level) {
+                4 -> s.balloons.count { it.color == s.targetColor }
+                else -> s.balloons.size
+            }
+        }
+
+        val requiredByLevel = (1..5).map { requiredPops(it) }
+        for (i in 1 until requiredByLevel.size) {
+            assertTrue(
+                "required pops dropped from level ${i} (${requiredByLevel[i - 1]}) " +
+                    "to level ${i + 1} (${requiredByLevel[i]})",
+                requiredByLevel[i] >= requiredByLevel[i - 1],
+            )
+        }
     }
 
     @Test
@@ -69,33 +122,35 @@ class PopBalloonsStateTest {
         val outOfOrder = s.balloons.first { it.color == laterColor }
 
         // tapping a balloon from a later colour group before its turn is ignored
-        s.pop(outOfOrder.id)
-        assertFalse(s.balloons.first { it.id == outOfOrder.id }.popped)
-        assertEquals(0, s.penalties)
+        val afterWrongTap = s.pop(outOfOrder.id)
+        assertFalse(afterWrongTap.balloons.first { it.id == outOfOrder.id }.popped)
+        assertEquals(0, afterWrongTap.penalties)
 
         // finishing the current colour group advances the target colour
-        s.balloons.filter { it.color == firstColor }.forEach { s.pop(it.id) }
-        assertTrue(s.targetColor != firstColor)
+        var advanced = s
+        s.balloons.filter { it.color == firstColor }.map { it.id }.forEach { advanced = advanced.pop(it) }
+        assertTrue(advanced.targetColor != firstColor)
     }
 
     @Test
     fun `popping every balloon in colour order completes level five`() {
-        val s = PopBalloonsState(level = 5)
+        var s = PopBalloonsState(level = 5)
         while (!s.isComplete) {
             val target = s.targetColor
-            s.balloons.filter { it.color == target && !it.popped }.forEach { s.pop(it.id) }
+            s.balloons.filter { it.color == target && !it.popped }.map { it.id }.forEach { s = s.pop(it) }
         }
         assertTrue(s.isComplete)
         assertEquals(0, s.penalties)
     }
 
     @Test
-    fun `no level ever exposes a score or timer`() {
-        // PopBalloonsState exposes only balloons, level, targetColor, isComplete
-        // and penalties (always zero) -- this test documents that shape by
-        // relying on compilation: if a score/timer field is ever added this
-        // test file continues to compile fine, but the reviewer greps for it.
+    fun `level three sizes never collapse below the coerced minimum`() {
+        // The Composable coerces size to at least 1.0 to protect the tap
+        // target; generating sub-1.0 scales in state only produced two
+        // visually-indistinguishable size classes on screen.
         val s = PopBalloonsState(level = 3)
-        assertEquals(0, s.penalties)
+        assertTrue(s.balloons.all { it.size >= 1f })
+        // still genuinely varied, not collapsed to a single size
+        assertTrue(s.balloons.map { it.size }.distinct().size > 1)
     }
 }
