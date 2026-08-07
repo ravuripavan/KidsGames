@@ -207,6 +207,24 @@ catalogue entries become 12 pictures — level 1 shows the same paw for "dog" an
 item, which makes the task answerable, but the game only becomes genuinely good
 with real artwork. It is the module most exposed to the missing-assets gap.
 
+**`KidButton`'s 64dp floor is not structural under `weight`.** The guarantee is
+`Modifier.defaultMinSize`, which by definition only applies when the incoming
+constraint is unbounded. `Modifier.weight(1f)` supplies an EXACT width, so the
+floor silently disappears — `:games:musicpad` shipped 62dp pads at 320dp width
+this way.
+
+This is a different trap from the earlier one. That was caller modifiers landing
+on the inner visual node, fixed by adding `layoutModifier`; `layoutModifier` does
+not help here, because the problem is the constraint type rather than which node
+receives it. Any weighted `KidButton` can go under the floor.
+
+The durable fix is for a caller to measure and choose its own column count rather
+than dividing available space by weight and hoping. Three modules now do that
+correctly. If the floor is meant to be a real guarantee under weight, `KidButton`
+would need `sizeIn(minWidth, minHeight)` rather than `defaultMinSize` — worth
+considering, but it would change layout behaviour for every existing caller, so it
+is not a safe mid-flight change.
+
 **`KidPalette.Swatch` has only seven entries** and has now constrained three
 modules: `:games:puzzleboard` (12 pieces, 5 colour collisions), `:games:colorsort`,
 and `:games:cardesign` (needed 8 colours at level 2 and defined a local teal).
