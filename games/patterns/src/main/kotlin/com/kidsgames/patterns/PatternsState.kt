@@ -8,9 +8,13 @@ package com.kidsgames.patterns
  * This state is fully immutable: [choose] never mutates `this`, it returns a
  * NEW [PatternsState]. Callers hold it in `mutableStateOf` and write the
  * result back (`state = state.choose(category)`), so Compose recomposition
- * is driven entirely by real state identity -- there is no separate
- * "version" or "trigger" counter anywhere in this module, and there must
- * never be one.
+ * is driven entirely by real state identity -- there is no STATE-VERSION
+ * counter anywhere in this class (a monotonic int bumped purely to force
+ * recomposition of an otherwise-unchanged mutable state machine), and there
+ * must never be one. `PatternsGame`'s `wobbleTrigger` is a different thing
+ * entirely -- a per-slot UI EVENT signal ("a wrong tap just happened"), the
+ * same pattern `games/popballoons/` uses for its own feedback animations --
+ * and it deliberately lives outside this class, not inside it.
  *
  * A "category" is an abstract index (0, 1, 2, ...) into the repeating unit.
  * This class deliberately has no notion of colour or shape -- it is pure

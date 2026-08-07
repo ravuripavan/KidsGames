@@ -105,6 +105,11 @@ class PatternsStateTest {
                 requiredByLevel[i] >= requiredByLevel[i - 1],
             )
         }
+        // Monotonicity alone would let a regression flatten every level to
+        // the same constant. Pin down the actual per-level values, and make
+        // sure level two is a REAL increase over level one (not a plateau).
+        assertEquals(listOf(3, 4, 6, 6, 8), requiredByLevel)
+        assertTrue(requiredByLevel[1] != requiredByLevel[0])
     }
 
     @Test

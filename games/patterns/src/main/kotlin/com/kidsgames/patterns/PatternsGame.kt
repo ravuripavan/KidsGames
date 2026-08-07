@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -51,8 +52,15 @@ import kotlinx.coroutines.delay
  * ([PatternsState]) held in a single `mutableStateOf`. `choose()` returns a
  * brand-new state rather than mutating anything in place; recomposition is
  * driven entirely by that new object's identity being written back to the
- * `var`. There is no separate "version" or "trigger" counter anywhere in
- * this module.
+ * `var`, and [PatternsState.filledCount] is what feedback logic compares
+ * (see `choose` call site below), never instance identity, so returning
+ * `this` on a wrong tap never stalls feedback. There is no STATE-VERSION
+ * counter anywhere in this module -- no monotonic int bumped purely to
+ * force recomposition of an otherwise-unchanged state machine.
+ * `wobbleTrigger` below is a different, legitimate thing: a per-slot UI
+ * EVENT signal ("a wrong tap just happened"), the same pattern used by
+ * `:games:popballoons` for its own feedback animations. Banning
+ * state-version counters does not ban that.
  *
  * A pre-reader cannot be told the rule, so this whole game is built around
  * making the repeating unit visually self-evident rather than described:
@@ -89,9 +97,11 @@ object PatternsGame : GameModule {
 
         // Immutable state machine: choose() returns a NEW PatternsState, it
         // never mutates filledCount in place. Writing the result back to
-        // this `var` is what drives recomposition -- there is no separate
-        // version/trigger counter to remember to bump, and there must never
-        // be one.
+        // this `var` is what drives recomposition -- there is no
+        // STATE-VERSION counter to remember to bump here, and there must
+        // never be one. `wobbleTrigger` just below is a separate, legitimate
+        // per-slot UI event signal, not a state-version counter -- see the
+        // class KDoc above.
         var state by remember(level) { mutableStateOf(PatternsState(level)) }
         var celebrating by remember(level) { mutableStateOf(false) }
         // Bumped on a wrong tap so the blank slot can play a visible wobble
@@ -129,7 +139,7 @@ object PatternsGame : GameModule {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 32.dp),
-                    horizontalArrangement = Arrangement.Center,
+                    horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
                 ) {
                     (0 until state.categories).forEach { category ->
                         ChoiceButton(
@@ -146,7 +156,6 @@ object PatternsGame : GameModule {
                                     }
                                 }
                             },
-                            modifier = Modifier.padding(horizontal = 12.dp),
                         )
                     }
                 }
@@ -173,8 +182,29 @@ object PatternsGame : GameModule {
 @Composable
 private fun SequenceRow(state: PatternsState, wobbleTrigger: Int, modifier: Modifier = Modifier) {
     val groupSize = groupSizeFor(state)
+    val listState = rememberLazyListState()
+
+    // The blank slot is always the LAST rendered slot (visibleLength stops
+    // exactly one past it), and therefore always the last slot in its group.
+    // Scrolling that group's start to the viewport's leading edge is enough
+    // to guarantee the whole group -- blank included -- is on screen: the
+    // widest group (L3, groupSize 4) is 4*68dp + 32dp = 304dp, which plus the
+    // 20dp leading content padding is 324dp, comfortably under the narrowest
+    // portrait viewport (360dp) with margin to spare. This must run both on
+    // level entry (the blank can already be several groups in, e.g. L3 starts
+    // with an 8-slot prefix -> blank's group index is 2, not 0) and after
+    // every fill, so it is keyed on the blank's identity rather than a
+    // one-shot Unit key.
+    val blankGroupIndex = state.blankIndex?.let { it / groupSize }
+    LaunchedEffect(blankGroupIndex) {
+        if (blankGroupIndex != null) {
+            listState.animateScrollToItem(blankGroupIndex)
+        }
+    }
+
     LazyRow(
         modifier = modifier,
+        state = listState,
         contentPadding = PaddingValues(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
@@ -221,7 +251,9 @@ private fun SequenceGroup(state: PatternsState, groupIndex: Int, groupSize: Int,
         (start until end).forEach { index ->
             val isBlank = index == state.blankIndex
             SequenceSlot(
+                slotIndex = index,
                 category = if (isBlank) null else state.categoryAt(index),
+                expectedCategory = state.categoryAt(index),
                 isBlank = isBlank,
                 wobbleTrigger = if (isBlank) wobbleTrigger else 0,
             )
@@ -230,10 +262,22 @@ private fun SequenceGroup(state: PatternsState, groupIndex: Int, groupSize: Int,
 }
 
 @Composable
-private fun SequenceSlot(category: Int?, isBlank: Boolean, wobbleTrigger: Int) {
-    val wobble = remember { Animatable(1f) }
+private fun SequenceSlot(slotIndex: Int, category: Int?, expectedCategory: Int, isBlank: Boolean, wobbleTrigger: Int) {
+    // Both the animation and its "have I already reacted to this trigger
+    // value" baseline are keyed to the slot's SEQUENCE identity, not the
+    // slot's position in the composition. Without this, when the blank
+    // advances the newly-revealed blank slot is a fresh composition that
+    // still sees the running (possibly already-positive) wobbleTrigger
+    // total and, guarded only by "> 0" rather than "changed", would replay
+    // the wrong-answer wobble on the very next CORRECT tap. Seeding the
+    // baseline to the trigger's value as of this slot's first composition
+    // means a slot only wobbles when the trigger changes while IT is the
+    // live blank.
+    val wobble = remember(slotIndex) { Animatable(1f) }
+    var lastSeenTrigger by remember(slotIndex) { mutableStateOf(wobbleTrigger) }
     LaunchedEffect(wobbleTrigger) {
-        if (wobbleTrigger > 0) {
+        if (wobbleTrigger != lastSeenTrigger) {
+            lastSeenTrigger = wobbleTrigger
             wobble.animateTo(0.85f, animationSpec = tween(90))
             wobble.animateTo(1f, animationSpec = tween(150))
         }
@@ -248,17 +292,31 @@ private fun SequenceSlot(category: Int?, isBlank: Boolean, wobbleTrigger: Int) {
     ) {
         if (isBlank || category == null) {
             // The single open slot: a dashed-look outline (drawn as a thin
-            // ring, since a true dashed stroke needs no extra vocabulary
-            // here) so it reads as "empty, waiting" without any text.
+            // ring) so it reads as "empty, waiting" without any text. The
+            // hole's silhouette matches the shape that actually belongs
+            // here rather than always being a circle, so it never visually
+            // hints "tap the circle" when the real answer is a square or
+            // triangle (L4/L5).
+            val holeShape = shapeFor(categoryShape(expectedCategory))
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .border(3.dp, KidPalette.OnSurface.copy(alpha = 0.35f), CircleShape),
+                    .border(3.dp, KidPalette.OnSurface.copy(alpha = 0.35f), holeShape),
             )
         } else {
             PieceGlyph(category = category, size = 56.dp)
         }
     }
+}
+
+private fun shapeFor(shape: PatternShape) = when (shape) {
+    PatternShape.CIRCLE -> CircleShape
+    PatternShape.SQUARE -> RoundedCornerShape(8.dp)
+    // No dedicated triangle Shape is defined in this module (the filled
+    // triangle is hand-drawn via Canvas); a rounded square reads as
+    // "not a circle" which is enough to stop steering the tap toward the
+    // circle button, without introducing a new triangle-outline primitive.
+    PatternShape.TRIANGLE -> RoundedCornerShape(8.dp)
 }
 
 @Composable
