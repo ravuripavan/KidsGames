@@ -21,7 +21,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,8 +42,10 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kidsgames.designkit.Celebration
@@ -52,8 +56,9 @@ import com.kidsgames.designkit.rememberSoundBank
 import com.kidsgames.gameapi.AgeBand
 import com.kidsgames.gameapi.GameModule
 import com.kidsgames.gameapi.Outcome
-import com.kidsgames.vocab.VocabItem
 import java.time.LocalDate
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 
 /**
@@ -62,37 +67,34 @@ import kotlinx.coroutines.delay
  * celebrated unconditionally. See [TalkTimeState]'s KDoc for the level
  * shape and for why nothing here is ever scored.
  *
- * LAYOUT BUDGET (comment-first, measured against the ~360x496dp
- * [BoxWithConstraints] actually reports after the shell's `safeDrawing`
- * insets and 96dp exit strip):
- *
- * Levels 1-4 (single target, "I said it" flow):
- *   top padding                 16dp
- *   word/phrase/sentence text  ~64dp  (up to 2 lines, only rendered content
- *                                      in the whole suite -- see the text
- *                                      exemption note below)
- *   gap                         16dp
- *   picture card               180dp  (level 1 only: SKIPPED, see
- *                                      [TalkTimeState.showsPictureFor])
- *   gap                         16dp
- *   speaker/replay button       88dp
- *   gap                         16dp
- *   "I said it" button          80dp
- *   ------------------------------
- *   L1  (no picture): 16+64+16+88+16+80          = 280dp of 496dp
- *   L2-4 (with picture): 16+64+16+180+16+88+16+80 = 476dp of 496dp
- *
- * Level 5 (sentence, then pick-the-picture):
- *   top padding                 16dp
- *   sentence text               64dp
- *   gap                         16dp
- *   speaker/replay button       88dp
- *   gap                         16dp
- *   row of 3 option pictures   112dp  (100dp buttons + 2*12dp gaps = 324dp
- *                                      of ~328dp usable width, 360dp screen
- *                                      minus 16dp margins each side)
- *   ------------------------------
- *   used                       312dp of 496dp -> 184dp spare
+ * LAYOUT: measured, not guessed. [BoxWithConstraints] gives real `maxWidth`
+ * and `maxHeight` for the space the shell hands this module after
+ * `safeDrawing` insets and its 96dp exit strip -- on a 360x640dp phone with
+ * a 24dp status bar and 48dp nav that is roughly 360x472dp, well short of an
+ * earlier draft's incorrect "~360x496dp" claim. A prior draft also let the
+ * speaker button live at the bottom of the scrolling content region, which
+ * meant a long sentence, a narrow (320dp) device, or a larger system font
+ * scale could push the ONLY way to replay the audio below the fold, with no
+ * scrollbar or hint that it was there -- silence, in the one module where
+ * hearing the content IS the activity. Nothing here does that again:
+ *  - ONLY the text and the optional picture live in a `Column` handed
+ *    `Modifier.weight(1f)` that scrolls internally (`verticalScroll`) -- so
+ *    a long sentence, or a larger system font scale, grows and scrolls that
+ *    region instead of pushing anything off screen;
+ *  - every CONTROL -- the speaker button, the "I said it" button on L1-4,
+ *    the row of option pictures on L5 -- sits OUTSIDE that scrolling
+ *    region, together in a fixed footer that is always fully laid out and
+ *    never clipped or scrolled away, regardless of how many lines the text
+ *    takes or how large the system font is;
+ *  - the picture card sizes itself from the SMALLER of the real
+ *    `maxWidth`/`maxHeight` budget, so it shrinks to make room when the
+ *    scrolling region is short on vertical space instead of holding a fixed
+ *    180dp and starving the controls below it; the L5 option buttons size
+ *    themselves as a fraction of `maxWidth` (clamped to stay above the
+ *    64dp minimum tap target), so a 320dp-wide device (KidsGames' minSdk
+ *    floor) still fits three L5 options side by side with room for a thumb
+ *    between them, instead of the fourth option clipping off the edge of
+ *    the screen.
  *
  * TEXT EXEMPTION: this is the ONLY module in the suite allowed to render
  * text, and even here text is used for exactly one thing -- the word,
@@ -153,6 +155,8 @@ object TalkTimeGame : GameModule {
                     LessonRound(
                         state = state,
                         muted = muted,
+                        maxWidth = maxWidth,
+                        maxHeight = maxHeight,
                         onSpeak = { playAudio(soundBank, state) },
                         onAcknowledge = { if (!celebrating) state = state.acknowledge() },
                     )
@@ -160,10 +164,12 @@ object TalkTimeGame : GameModule {
                     PickPictureRound(
                         state = state,
                         muted = muted,
+                        maxWidth = maxWidth,
+                        maxHeight = maxHeight,
                         onSpeak = { playAudio(soundBank, state) },
-                        onTapOption = { itemId ->
+                        onTapOption = { image ->
                             if (!celebrating) {
-                                val next = state.tapPicture(itemId)
+                                val next = state.tapPicture(image)
                                 if (next != state) {
                                     soundBank.play(SoundBank.Cue.SUCCESS)
                                     state = next
@@ -192,11 +198,21 @@ private fun playAudio(soundBank: SoundBank, state: TalkTimeState) {
     }
 }
 
-/** Levels 1-4: word, phrase, or sentence text plus (L2+) a picture, a speaker to hear it, and an "I said it" button to close the round. */
+/**
+ * Levels 1-4: word, phrase, or sentence text plus (L2+) a picture, a speaker
+ * to hear it, and an "I said it" button to close the round. Only the text
+ * and optional picture scroll, in the space above the footer; the speaker
+ * and the "I said it" button -- the controls, one of which is the only way
+ * to finish the level -- sit together in a fixed footer below and are never
+ * clipped or scrolled away, however many lines the text wraps to or how
+ * large the system font is.
+ */
 @Composable
 private fun LessonRound(
     state: TalkTimeState,
     muted: Boolean,
+    maxWidth: Dp,
+    maxHeight: Dp,
     onSpeak: () -> Unit,
     onAcknowledge: () -> Unit,
 ) {
@@ -207,23 +223,52 @@ private fun LessonRound(
         onSpeak()
     }
 
+    val speakerSize = (maxHeight * 0.14f).coerceIn(64.dp, 88.dp)
+    val buttonSize = (maxHeight * 0.13f).coerceIn(64.dp, 80.dp)
+    // Sized from the SMALLER of width/height so the picture shrinks to make
+    // room when the scrolling region is short on vertical space (a narrow
+    // device, a long wrapped sentence, a larger system font), instead of
+    // holding a fixed size and starving the footer controls below it.
+    val pictureBudget = minOf(maxWidth * 0.5f, maxHeight * 0.32f)
+    val pictureSize = pictureBudget.coerceIn(96.dp, 180.dp)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(top = 16.dp, start = 16.dp, end = 16.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        LessonText(state = state)
+        Column(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            LessonText(state = state)
+
+            if (state.showsPicture) {
+                Spacer(modifier = Modifier.size(16.dp))
+                val pictureImage = if (state.level == 4) state.sentenceImage else state.word.image
+                PictureCard(
+                    key = if (state.level == 4) state.sentenceImage else state.word.id,
+                    speakTrigger = speakTrigger,
+                    size = pictureSize,
+                    glyphSize = pictureSize * 0.67f,
+                ) {
+                    if (state.level == 4) {
+                        SentenceGlyph(image = pictureImage, modifier = Modifier.fillMaxSize())
+                    } else {
+                        ItemGlyph(item = state.word, modifier = Modifier.fillMaxSize())
+                    }
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.size(16.dp))
 
-        if (state.showsPicture) {
-            PictureCard(item = state.word, speakTrigger = speakTrigger, size = 180.dp, glyphSize = 120.dp)
-            Spacer(modifier = Modifier.size(16.dp))
-        }
-
         SpeakerButton(
-            size = 88.dp,
+            size = speakerSize,
             muted = muted,
             onTap = {
                 speakTrigger++
@@ -234,23 +279,32 @@ private fun LessonRound(
         Spacer(modifier = Modifier.size(16.dp))
 
         KidButton(onClick = onAcknowledge, testTag = "said-it") {
-            Box(modifier = Modifier.size(80.dp), contentAlignment = Alignment.Center) {
-                CheckGlyph(modifier = Modifier.size(44.dp))
+            Box(modifier = Modifier.size(buttonSize), contentAlignment = Alignment.Center) {
+                CheckGlyph(modifier = Modifier.size(buttonSize * 0.55f))
             }
         }
     }
 }
 
-/** Level 5: the sentence is spoken, then the child taps the picture it describes among three candidates. */
+/**
+ * Level 5: the sentence is spoken, then the child taps the picture it
+ * describes among three candidates. Only the text scrolls, above the
+ * footer; the speaker and the option row -- the controls, one of which is
+ * the only way to finish the level -- sit together in a fixed footer and
+ * are never clipped, and each option button sizes itself from the real
+ * `maxWidth` so three fit even on a 320dp-wide device.
+ */
 @Composable
 private fun PickPictureRound(
     state: TalkTimeState,
     muted: Boolean,
+    maxWidth: Dp,
+    maxHeight: Dp,
     onSpeak: () -> Unit,
-    onTapOption: (String) -> Unit,
+    onTapOption: (Int) -> Unit,
 ) {
     var speakTrigger by remember(state.level) { mutableStateOf(0) }
-    var wrongTapId by remember(state.level) { mutableStateOf<String?>(null) }
+    var wrongTapImage by remember(state.level) { mutableStateOf<Int?>(null) }
     var wrongTapTrigger by remember(state.level) { mutableStateOf(0) }
 
     LaunchedEffect(state.level) {
@@ -258,18 +312,31 @@ private fun PickPictureRound(
         onSpeak()
     }
 
+    val speakerSize = (maxHeight * 0.14f).coerceIn(64.dp, 88.dp)
+    val optionGap = 12.dp
+    val sidePadding = 16.dp
+    val optionSize = ((maxWidth - sidePadding * 2 - optionGap * 2) / 3).coerceIn(64.dp, 108.dp)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(top = 16.dp, start = 16.dp, end = 16.dp),
+            .padding(start = sidePadding, end = sidePadding, top = 16.dp, bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        LessonText(state = state)
+        Column(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            LessonText(state = state)
+        }
 
         Spacer(modifier = Modifier.size(16.dp))
 
         SpeakerButton(
-            size = 88.dp,
+            size = speakerSize,
             muted = muted,
             onTap = {
                 speakTrigger++
@@ -279,18 +346,19 @@ private fun PickPictureRound(
 
         Spacer(modifier = Modifier.size(16.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            for (option in state.options) {
+        Row(horizontalArrangement = Arrangement.spacedBy(optionGap)) {
+            for (image in state.pictureOptions) {
                 OptionButton(
-                    item = option,
-                    wrongTapId = wrongTapId,
+                    image = image,
+                    size = optionSize,
+                    wrongTapImage = wrongTapImage,
                     wrongTapTrigger = wrongTapTrigger,
                     onTap = {
-                        if (option.id != state.word.id) {
-                            wrongTapId = option.id
+                        if (image != state.sentence.image) {
+                            wrongTapImage = image
                             wrongTapTrigger++
                         }
-                        onTapOption(option.id)
+                        onTapOption(image)
                     },
                 )
             }
@@ -318,12 +386,13 @@ private fun LessonText(state: TalkTimeState) {
 
 @Composable
 private fun PictureCard(
-    item: VocabItem,
+    key: Any,
     speakTrigger: Int,
-    size: androidx.compose.ui.unit.Dp,
-    glyphSize: androidx.compose.ui.unit.Dp,
+    size: Dp,
+    glyphSize: Dp,
+    content: @Composable () -> Unit,
 ) {
-    val pop = remember(item.id) { Animatable(1f) }
+    val pop = remember(key) { Animatable(1f) }
     LaunchedEffect(speakTrigger) {
         if (speakTrigger > 0) {
             pop.snapTo(1f)
@@ -338,35 +407,36 @@ private fun PictureCard(
             .background(KidPalette.Surface, RoundedCornerShape(28.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        ItemGlyph(item = item, modifier = Modifier.size(glyphSize))
+        Box(modifier = Modifier.size(glyphSize)) { content() }
     }
 }
 
 @Composable
 private fun OptionButton(
-    item: VocabItem,
-    wrongTapId: String?,
+    image: Int,
+    size: Dp,
+    wrongTapImage: Int?,
     wrongTapTrigger: Int,
     onTap: () -> Unit,
 ) {
-    val wobble = remember(item.id) { Animatable(0f) }
+    val wobble = remember(image) { Animatable(0f) }
     LaunchedEffect(wrongTapTrigger) {
-        if (wrongTapTrigger > 0 && wrongTapId == item.id) {
+        if (wrongTapTrigger > 0 && wrongTapImage == image) {
             wobble.snapTo(0f)
             wobble.animateTo(10f, tween(80))
             wobble.animateTo(-10f, tween(140))
             wobble.animateTo(0f, tween(80))
         }
     }
-    KidButton(onClick = onTap, testTag = "option-${item.id}") {
+    KidButton(onClick = onTap, testTag = "option-$image") {
         Box(
             modifier = Modifier
-                .size(100.dp)
+                .size(size)
                 .padding(8.dp),
             contentAlignment = Alignment.Center,
         ) {
-            ItemGlyph(
-                item = item,
+            SentenceGlyph(
+                image = image,
                 modifier = Modifier
                     .fillMaxSize()
                     .rotate(wobble.value),
@@ -469,16 +539,23 @@ private fun CheckGlyph(modifier: Modifier = Modifier) {
  * notification for volume changes without registering a broadcast receiver
  * (a capability :core:designkit does not expose to game modules), so a
  * lightweight poll is the closest honest option available here -- the same
- * approach `:games:whatisit` uses for the same reason.
+ * approach `:games:whatisit` uses for the same reason. Gated to
+ * `Lifecycle.State.STARTED` via [repeatOnLifecycle] so the poll suspends
+ * (and stops waking the device) whenever the activity is stopped -- e.g. the
+ * screen turns off in a pocket -- even though composition itself survives a
+ * stop and would otherwise keep this loop ticking.
  */
 @Composable
 private fun rememberIsDeviceMuted(): Boolean {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var muted by remember { mutableStateOf(isMuted(context)) }
-    LaunchedEffect(context) {
-        while (true) {
-            muted = isMuted(context)
-            delay(1000L)
+    LaunchedEffect(context, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                muted = isMuted(context)
+                delay(1000L)
+            }
         }
     }
     return muted

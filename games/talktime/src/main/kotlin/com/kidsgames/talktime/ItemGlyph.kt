@@ -38,6 +38,23 @@ fun ItemGlyph(item: VocabItem, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Renders a [Sentence][com.kidsgames.vocab.Sentence]'s own placeholder
+ * `image` id as a glyph. A [Sentence] carries no [VocabItem] of its own, so
+ * this maps the image id to a [Sector] via [TalkTimeState.sectorFor] --
+ * deterministic, so the same sentence always renders the same shape, and
+ * two images [TalkTimeState] chose from different sectors always render
+ * visibly different shapes.
+ */
+@Composable
+fun SentenceGlyph(image: Int, modifier: Modifier = Modifier) {
+    val sector = TalkTimeState.sectorFor(image)
+    val color = KidPalette.Swatch[sector.ordinal % KidPalette.Swatch.size]
+    Canvas(modifier = modifier) {
+        drawSectorGlyph(sector, color)
+    }
+}
+
 private fun DrawScope.drawSectorGlyph(sector: Sector, color: Color) {
     when (sector) {
         Sector.ANIMALS -> drawPaw(color)
