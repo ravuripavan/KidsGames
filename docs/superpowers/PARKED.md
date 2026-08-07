@@ -118,6 +118,46 @@ column, outside any scrollable region, so it holds unconditionally.
 
 ## Cross-cutting issues found while reviewing (not module defects)
 
+**Nothing in the app makes a sound, and nothing ever has.** `SoundBank.resourceFor`
+is never assigned anywhere in the repo. It defaults to `{ null }`, so every cue in
+every module — tap, success, gentle-retry, celebration — is a silent no-op, as is
+every `playRaw` call for catalogue words. Fourteen modules have been designed
+around audio feedback that has never once played.
+
+This is larger than "recordings are missing". The wiring point exists and nothing
+is plugged into it, so even if audio files were added tomorrow they would not play
+until something assigns `resourceFor`. Two consequences worth holding onto:
+
+- Every "verified playable at zero volume" finding in these reviews is really a
+  statement about how the app behaves *today, for everyone*, not about an edge
+  case. That is fortunate — the constraint forced visible carriers everywhere.
+- Audio-dependent behaviour has never been exercised. `:games:whatisit` and
+  `:games:talktime` both rest on spoken words, and `:games:whatisit`'s level-5
+  reverse mode is currently blind guessing for every child, because the name it
+  asks them to recognise is never spoken.
+
+Wiring `resourceFor` belongs in Phase 3, alongside the first real cue assets.
+
+**The picture catalogue has no pictures, and one module cannot work without them.**
+`:games:whatisit` renders a drawing per *sector* rather than per *item*, so 144
+catalogue entries become 12 pictures — level 1 shows the same paw for "dog" and
+"bird". Under review it is being changed to derive a distinct procedural glyph per
+item, which makes the task answerable, but the game only becomes genuinely good
+with real artwork. It is the module most exposed to the missing-assets gap.
+
+**`KidPalette.Swatch` has only seven entries** and has now constrained three
+modules: `:games:puzzleboard` (12 pieces, 5 colour collisions), `:games:colorsort`,
+and `:games:cardesign` (needed 8 colours at level 2 and defined a local teal).
+Each solved it locally with shape or pip-count markers, which is the right answer
+for accessibility anyway — but a shared swatch that carries distinct non-colour
+markers would stop each module reinventing it.
+
+**Stale hand-reserved exit zones.** Modules built before the shell reserved the
+exit strip structurally may still pad for it themselves. `:games:memorypairs`
+carried 104dp of bottom padding duplicating `GameHost`'s 96dp, which cost it a
+quarter of its vertical budget and contributed to a blocking overflow.
+`:games:puzzleboard` reserved 80dp by hand. Worth a sweep across all fourteen.
+
 **Edge-to-edge with no insets applied.** `MainActivity` calls `enableEdgeToEdge()`
 and nothing anywhere applies `safeDrawing` or `systemBars` insets. Every game's top
 content draws under the status bar. This affects all fourteen modules and belongs
