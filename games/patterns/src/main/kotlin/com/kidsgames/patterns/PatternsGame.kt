@@ -30,6 +30,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -66,8 +67,8 @@ import kotlinx.coroutines.delay
  * making the repeating unit visually self-evident rather than described:
  * the sequence is laid out left-to-right exactly as it plays, resolved
  * pieces stay on screen (never removed or reordered -- see the invariant
- * note on [SequenceRow]), and every [visibleReps]-length repeat is wrapped
- * in its own faintly-tinted, alternating group box. A child watching the
+ * note on [SequenceRow]), and every repeat of the unit is wrapped in its
+ * own tinted, bracketed, alternating group box. A child watching the
  * boxes tile left-to-right sees the SAME shapes-in-the-same-order recur
  * inside each box, which is the whole rule made visible without a word.
  * The next blank is a highlighted, pulsing dashed outline -- it is the only
@@ -76,10 +77,10 @@ import kotlinx.coroutines.delay
  *
  * Colour is never the sole carrier of meaning: every category the state
  * machine hands out (an abstract `Int`) is rendered here as a fixed
- * (shape, colour) pair -- see [categoryShape] and [categoryColor] -- so a
- * child with colour vision deficiency can still read the pattern purely by
- * shape. This holds at every level, L5 included; L5's extra difficulty is
- * a third category and a longer sequence, never colour becoming the only
+ * (shape, colour) pair -- see [PatternsVisual] -- so a child with colour
+ * vision deficiency can still read the pattern purely by shape. This holds
+ * at every level, L5 included; L5 uses its own distinct (shape, colour) set
+ * (see [PatternsVisual]'s KDoc), never colour becoming the only
  * distinguishing feature.
  */
 object PatternsGame : GameModule {
@@ -109,7 +110,21 @@ object PatternsGame : GameModule {
         // which is silent at the spec's zero-volume baseline.
         var wobbleTrigger by remember(level) { mutableStateOf(0) }
 
-        LaunchedEffect(state) {
+        // Keyed on `state.isComplete`, NOT on `state` itself. `isComplete`
+        // only ever flips false -> true once (see PatternsState KDoc: it
+        // never regresses), and after it is true every tap is a no-op that
+        // returns the very same `this` (see `choose`), so there is no
+        // subsequent state identity change that could restart this key.
+        // The old `LaunchedEffect(state)` restarted on ANY new state
+        // instance -- including one produced after completion by unrelated
+        // recomposition -- which cancelled the running `delay` mid-flight;
+        // the relaunched copy then saw `celebrating == true` and did
+        // nothing, so `onFinished` was never called and the screen was
+        // stuck showing only the celebration overlay. Keying on the
+        // stable-once-true boolean means this coroutine cannot be cancelled
+        // and restarted between setting `celebrating` and calling
+        // `onFinished`.
+        LaunchedEffect(state.isComplete) {
             if (state.isComplete && !celebrating) {
                 celebrating = true
                 soundBank.play(SoundBank.Cue.CELEBRATION)
@@ -143,6 +158,7 @@ object PatternsGame : GameModule {
                 ) {
                     (0 until state.categories).forEach { category ->
                         ChoiceButton(
+                            level = level,
                             category = category,
                             onTap = {
                                 if (!celebrating) {
@@ -171,8 +187,9 @@ object PatternsGame : GameModule {
 /**
  * Renders the sequence left-to-right, grouped visually into repeat blocks
  * so the cycle is something the child can SEE, not something they must be
- * told. Groups alternate a faint background tint purely as a grouping cue
- * (never the sole signal of anything -- shape still carries the pattern).
+ * told. Groups alternate a visibly-tinted, bracketed panel purely as a
+ * grouping cue (never the sole signal of anything -- shape still carries
+ * the pattern).
  *
  * INVARIANT: a resolved sequence slot never changes screen position or
  * disappears. [state]'s `visibleLength` only ever grows (see its KDoc), so
@@ -196,6 +213,23 @@ object PatternsGame : GameModule {
 @Composable
 private fun SequenceRow(state: PatternsState, wobbleTrigger: Int, modifier: Modifier = Modifier) {
     val groupSize = groupSizeFor(state)
+
+    // At a raised system "Display size" the effective dp width of the
+    // screen shrinks (density goes up, so the same physical screen holds
+    // fewer dp), and the device pass found only ~3.5 of the fixed ~68dp
+    // slots fit in the viewport at ~1.3x -- rarely enough to show one full
+    // repeat plus the blank, let alone two repeats side by side. Shrinking
+    // the slot at low effective widths buys back roughly one more slot of
+    // viewport room, which is enough to reliably show two full repeats for
+    // the 2-slot-per-repeat levels (L1/L2). It is NOT enough, on its own, to
+    // show two full repeats for the 3- or 4-slot-per-repeat levels (L3/L4/L5)
+    // on the narrowest supported phone at 1.3x -- there is no slot size that
+    // stays legible at 64dp+ touch-adjacent glyph sizes and also fits 6-8
+    // slots plus edge padding into ~230dp of usable width. That is a real,
+    // acknowledged limit of this module's layout, not something this
+    // resize works around.
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val slotSize = if (screenWidthDp < 340) 44.dp else 56.dp
 
     // Computed once per level (not animated) so the very first frame is
     // already positioned correctly -- an animated jump immediately after an
@@ -231,12 +265,28 @@ private fun SequenceRow(state: PatternsState, wobbleTrigger: Int, modifier: Modi
             val groupEnd = minOf(groupStart + groupSize, state.visibleLength) - 1
             val isBlank = index == state.blankIndex
             SequenceSlot(
+                level = state.level,
                 slotIndex = index,
+                slotSize = slotSize,
                 category = if (isBlank) null else state.categoryAt(index),
                 expectedCategory = state.categoryAt(index),
                 isBlank = isBlank,
                 wobbleTrigger = if (isBlank) wobbleTrigger else 0,
-                groupTint = if (groupIndex % 2 == 0) KidPalette.Surface else KidPalette.Background,
+                // A real, legible contrast against the cream background --
+                // the device pass found the previous Surface/Background pair
+                // (near-white on near-white) invisible in several frames, so
+                // the grouping cue was riding on the gap width alone. This
+                // tint alternates a visibly-tinted panel with fully
+                // transparent, and every slot in the group also gets a thin
+                // outline in the same shape as the tint (rounded only at the
+                // group's outer corners), so the group reads as one bracketed
+                // panel even where the tint itself is faint on a given
+                // display.
+                groupTint = if (groupIndex % 2 == 0) {
+                    KidPalette.Yellow.copy(alpha = 0.22f)
+                } else {
+                    Color.Transparent
+                },
                 isGroupStart = index == groupStart,
                 isGroupEnd = index == groupEnd,
             )
@@ -258,7 +308,9 @@ private fun groupSizeFor(state: PatternsState): Int {
 
 @Composable
 private fun SequenceSlot(
+    level: Int,
     slotIndex: Int,
+    slotSize: Dp,
     category: Int?,
     expectedCategory: Int,
     isBlank: Boolean,
@@ -302,8 +354,16 @@ private fun SequenceSlot(
                 bottom = 10.dp,
             )
             .background(groupTint, groupShape)
+            // Thin outline in the group's own rounded-at-the-ends shape, on
+            // every slot in the group -- since the shape is only rounded at
+            // the group's first/last slot and adjoining slots' straight
+            // edges coincide, this reads as one continuous bracketed panel
+            // around the whole repeat rather than a per-slot box, and it
+            // stays legible even on a display where the tint fill itself is
+            // washed out.
+            .border(2.dp, KidPalette.OnSurface.copy(alpha = 0.18f), groupShape)
             .padding(6.dp)
-            .size(56.dp)
+            .size(slotSize)
             .scale(if (isBlank) wobble.value else 1f),
         contentAlignment = Alignment.Center,
     ) {
@@ -314,14 +374,14 @@ private fun SequenceSlot(
             // here rather than always being a circle, so it never visually
             // hints "tap the circle" when the real answer is a square or
             // triangle (L4/L5).
-            val holeShape = shapeFor(categoryShape(expectedCategory))
+            val holeShape = shapeFor(PatternsVisual.visualFor(level, expectedCategory).shape)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .border(3.dp, KidPalette.OnSurface.copy(alpha = 0.35f), holeShape),
             )
         } else {
-            PieceGlyph(category = category, size = 56.dp)
+            PieceGlyph(level = level, category = category, size = slotSize)
         }
     }
 }
@@ -337,43 +397,34 @@ private fun shapeFor(shape: PatternShape) = when (shape) {
 }
 
 @Composable
-private fun ChoiceButton(category: Int, onTap: () -> Unit, modifier: Modifier = Modifier) {
+private fun ChoiceButton(level: Int, category: Int, onTap: () -> Unit, modifier: Modifier = Modifier) {
     KidButton(onClick = onTap, modifier = modifier) {
-        PieceGlyph(category = category, size = 48.dp)
+        PieceGlyph(level = level, category = category, size = 48.dp)
     }
 }
 
-/** Renders a category as its fixed (shape, colour) pair -- shape always carries the meaning colour reinforces. */
+/**
+ * Renders a category as its fixed (shape, colour) pair -- shape always
+ * carries the meaning colour reinforces. The pair itself comes from
+ * [PatternsVisual], which varies by level (see its KDoc for why L5's set
+ * differs from L4's).
+ */
 @Composable
-private fun PieceGlyph(category: Int, size: Dp) {
-    val color = categoryColor(category)
-    when (categoryShape(category)) {
+private fun PieceGlyph(level: Int, category: Int, size: Dp) {
+    val visual = PatternsVisual.visualFor(level, category)
+    when (visual.shape) {
         PatternShape.CIRCLE -> Box(
-            modifier = Modifier.size(size).background(color, CircleShape),
+            modifier = Modifier.size(size).background(visual.color, CircleShape),
         )
 
         PatternShape.SQUARE -> Box(
-            modifier = Modifier.size(size).background(color, RoundedCornerShape(8.dp)),
+            modifier = Modifier.size(size).background(visual.color, RoundedCornerShape(8.dp)),
         )
 
         PatternShape.TRIANGLE -> androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
-            drawTriangle(color)
+            drawTriangle(visual.color)
         }
     }
-}
-
-private enum class PatternShape { CIRCLE, SQUARE, TRIANGLE }
-
-private fun categoryShape(category: Int): PatternShape = when (category) {
-    0 -> PatternShape.CIRCLE
-    1 -> PatternShape.SQUARE
-    else -> PatternShape.TRIANGLE
-}
-
-private fun categoryColor(category: Int): Color = when (category) {
-    0 -> KidPalette.Blue
-    1 -> KidPalette.Orange
-    else -> KidPalette.Green
 }
 
 private fun DrawScope.drawTriangle(color: Color) {
