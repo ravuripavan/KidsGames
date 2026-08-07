@@ -1,12 +1,17 @@
 package com.kidsgames.shell
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import com.kidsgames.gameapi.GameModule
 import com.kidsgames.gameapi.Outcome
 import kotlinx.coroutines.launch
@@ -26,12 +31,22 @@ import kotlinx.coroutines.launch
  * System back while the picker is showing is NOT intercepted here, so it
  * falls through to the platform default and exits the app, as it should —
  * the picker is the top of the shell's own navigation stack.
+ *
+ * [MainActivity][com.kidsgames.app] calls `enableEdgeToEdge()`, which draws
+ * the whole window behind the system bars. This composable is the shell/host
+ * boundary — the one place both the picker and every game funnel through —
+ * so it is where `safeDrawing` insets are applied. Neither the picker nor any
+ * [GameModule] has to know edge-to-edge is enabled or remember to inset
+ * itself: the space they are laid out in is already safe.
  */
 @Composable
 fun KidsApp(registry: GameRegistry, progressStore: ProgressStore) {
     var activeGame by remember { mutableStateOf<GameModule?>(null) }
     var activeLevel by remember { mutableStateOf(1) }
     val scope = rememberCoroutineScope()
+    val safeAreaModifier = Modifier
+        .fillMaxSize()
+        .windowInsetsPadding(WindowInsets.safeDrawing)
 
     val game = activeGame
     if (game == null) {
@@ -43,6 +58,7 @@ fun KidsApp(registry: GameRegistry, progressStore: ProgressStore) {
                     activeGame = selected
                 }
             },
+            modifier = safeAreaModifier,
         )
     } else {
         // Intercepts system back only while a game is showing. Returns the
@@ -66,6 +82,7 @@ fun KidsApp(registry: GameRegistry, progressStore: ProgressStore) {
             level = activeLevel,
             onFinished = { outcome -> leaveGame(outcome) },
             onExitRequested = { leaveGame(Outcome.Abandoned) },
+            modifier = safeAreaModifier,
         )
     }
 }

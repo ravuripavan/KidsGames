@@ -19,6 +19,26 @@ import com.kidsgames.gameapi.GameModule
 import com.kidsgames.gameapi.Outcome
 
 /**
+ * Fixed clearance reserved along the bottom of the game's content area for
+ * the exit control's footprint. [GameModule.Play] is composed inside a box
+ * that stops this far above the bottom edge, so a game measuring and
+ * placing its own content within the space it is handed cannot collide with
+ * the exit button — it never sees the button, its bounds, or even that it
+ * exists. This is the structural fix for findings across carrace,
+ * colorsort, and matchshapes, where the exit button won hit-testing against
+ * game content placed under it: each required a game author to remember a
+ * hand-tuned exclusion zone, and each eventually forgot or miscalculated
+ * it. See the cross-cutting note in docs/superpowers/PARKED.md recommending
+ * exactly this: fixed bottom padding on the outer content, applied by the
+ * shell rather than by each game.
+ *
+ * 96dp comfortably contains the button (a touch node no larger than
+ * [MinTapTarget]) plus its 16dp padding on every side, with margin to
+ * spare.
+ */
+val ExitZoneHeight = 96.dp
+
+/**
  * Wraps a running [GameModule.Play] with the one thing every game in the
  * suite must offer and none of them are trusted to build themselves: a
  * visible, always-available way back to the picker.
@@ -27,6 +47,11 @@ import com.kidsgames.gameapi.Outcome
  * placed in the bottom-start corner, where a small hand holding the device
  * one-handed in portrait can reach it with a thumb, and away from the centre
  * of the screen where play happens so it is not brushed by accident.
+ *
+ * The game is composed inside a content box that excludes [ExitZoneHeight]
+ * of space along the bottom edge; the exit button is composed after it, in
+ * that reserved strip, so there is no rectangle in which both can draw and
+ * ordering can no longer decide the winner of a hit test.
  */
 @Composable
 fun GameHost(
@@ -34,27 +59,25 @@ fun GameHost(
     level: Int,
     onFinished: (Outcome) -> Unit,
     onExitRequested: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        game.Play(level = level, onFinished = onFinished)
+    Box(modifier = modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().padding(bottom = ExitZoneHeight)) {
+            game.Play(level = level, onFinished = onFinished)
+        }
 
-        // KidButton deliberately does not let a caller's modifier reach its
-        // outer, real-touch-target node (see its own doc), so `.align(...)`
-        // cannot be passed to KidButton directly — it would land on an inner
-        // layer and be ignored by this Box. Wrapping KidButton in a plain
-        // Box that IS a direct child of this Box is what makes the
-        // alignment apply.
-        Box(
-            modifier = Modifier
+        // KidButton's `modifier` param only reaches its inner visual layer,
+        // never the outer touch-target node a Box needs for alignment to
+        // take effect — `layoutModifier` is the one that lands on that outer
+        // node, so it's the one that must carry `.align(...)`.
+        KidButton(
+            onClick = onExitRequested,
+            layoutModifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(16.dp),
+            testTag = "exit_game_button",
         ) {
-            KidButton(
-                onClick = onExitRequested,
-                testTag = "exit_game_button",
-            ) {
-                ExitArrowIcon()
-            }
+            ExitArrowIcon()
         }
     }
 }
