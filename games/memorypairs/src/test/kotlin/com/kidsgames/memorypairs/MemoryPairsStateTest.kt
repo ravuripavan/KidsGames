@@ -180,6 +180,31 @@ class MemoryPairsStateTest {
     }
 
     @Test
+    fun `two different shuffle seeds produce different card orderings`() {
+        val a = MemoryPairsState(level = 4, shuffleSeed = 1)
+        val b = MemoryPairsState(level = 4, shuffleSeed = 2)
+        assertTrue(
+            "two different seeds produced the exact same symbol ordering",
+            a.cards.map { it.symbolIndex } != b.cards.map { it.symbolIndex },
+        )
+    }
+
+    @Test
+    fun `pairing integrity holds under a non-default shuffle seed`() {
+        for (seed in listOf(1, 42, -7, 999)) {
+            for (level in 1..5) {
+                val s = MemoryPairsState(level = level, shuffleSeed = seed)
+                val pairs = MemoryPairsState.pairCount(level)
+                assertEquals(pairs * 2, s.cards.size)
+                assertEquals(pairs, s.cards.map { it.symbolIndex }.distinct().size)
+                s.cards.groupBy { it.symbolIndex }.values.forEach { group ->
+                    assertEquals(2, group.size)
+                }
+            }
+        }
+    }
+
+    @Test
     fun `each level has enough distinct symbols to give every pair a unique picture`() {
         for (level in 1..5) {
             val s = MemoryPairsState(level = level)
