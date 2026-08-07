@@ -144,6 +144,29 @@ class PopBalloonsStateTest {
     }
 
     @Test
+    fun `pop never removes a balloon or reorders the list`() {
+        // PopBalloonsGame renders `state.balloons` directly into a
+        // LazyVerticalGrid's items(...) in list order. If pop() ever
+        // shrank the list or reordered it, every balloon after the
+        // popped one would shift to a new grid cell -- exactly the
+        // "board re-packs under your finger" defect this state shape
+        // exists to prevent. This test pins the list's id sequence and
+        // size as the game's real invariant, one layer below the
+        // Compose grid itself (which needs a UI/instrumentation test to
+        // verify actual on-screen position -- not expressible in this
+        // JVM-only module).
+        var s = PopBalloonsState(level = 4)
+        val originalIds = s.balloons.map { it.id }
+        val originalSize = s.balloons.size
+
+        s.balloons.map { it.id }.forEach { id ->
+            s = s.pop(id)
+            assertEquals(originalSize, s.balloons.size)
+            assertEquals(originalIds, s.balloons.map { it.id })
+        }
+    }
+
+    @Test
     fun `level three sizes never collapse below the coerced minimum`() {
         // The Composable coerces size to at least 1.0 to protect the tap
         // target; generating sub-1.0 scales in state only produced two

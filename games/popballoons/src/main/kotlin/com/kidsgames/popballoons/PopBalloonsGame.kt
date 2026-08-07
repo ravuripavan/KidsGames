@@ -46,7 +46,33 @@ import kotlinx.coroutines.delay
  *
  * Copy this object's shape for every other game module: an `object : GameModule`
  * exposing the frozen properties, and a `Play` composable that owns nothing
- * but a plain-Kotlin state machine plus a recomposition trigger.
+ * but a plain-Kotlin, pure state machine ([PopBalloonsState]) held in a
+ * single `mutableStateOf`. `pop()` returns a brand-new state object rather
+ * than mutating anything in place; recomposition is driven entirely by that
+ * new object's identity being written back to the `var`. There is no
+ * separate "version" or "trigger" counter anywhere in this module, and
+ * there must never be one -- if you find yourself reaching for one, the
+ * state shape is wrong, not missing a counter.
+ *
+ * INVARIANT this Play composable must hold: a balloon that has not been
+ * popped never changes screen position. [items] below is called on the
+ * FULL (unfiltered) balloon list for exactly this reason -- popped balloons
+ * stay in the grid as invisible, non-clickable placeholders instead of
+ * being removed, so every still-live balloon keeps the same grid cell for
+ * its whole life. (An earlier version filtered popped balloons out of the
+ * list fed to `items(...)`; that reflows every later cell back by one slot
+ * on every pop, which is worse than useless at L4/L5 where the child is
+ * aiming at one specific colour among decoys -- the board re-packs under
+ * their finger between taps.)
+ *
+ * WARNING for anyone copying [BalloonView]: modifiers passed to `KidButton`'s
+ * `modifier =` parameter (scale, offset, etc.) move the drawn VISUAL only --
+ * they land on `KidButton`'s inner content Box, not on its outer touch
+ * node, which is sized and positioned independently (see [MinTapTarget]).
+ * At the ~6dp drift used here that mismatch is invisible, but any module
+ * with real travel (a lane-switching or drag-based game) MUST apply
+ * position-changing modifiers to the element that also owns the touch
+ * target, or the hitbox will silently stop matching what's on screen.
  */
 object PopBalloonsGame : GameModule {
 
@@ -64,7 +90,8 @@ object PopBalloonsGame : GameModule {
         // Immutable state machine: pop() returns a NEW PopBalloonsState, it
         // never mutates balloons in place. Writing the result back to this
         // `var` is what drives recomposition -- there is no separate
-        // version counter to remember to bump.
+        // version/trigger counter to remember to bump, and there must never
+        // be one.
         var state by remember(level) { mutableStateOf(PopBalloonsState(level)) }
         var celebrating by remember(level) { mutableStateOf(false) }
         // Bumped per-balloon on a wrong-colour tap so BalloonView can play a
@@ -93,12 +120,14 @@ object PopBalloonsGame : GameModule {
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                // Filter popped balloons out of the list fed to items(...)
-                // rather than branching inside the item lambda -- emitting a
-                // popped balloon as a zero-size item reflows the whole grid
-                // and moves every other balloon out from under the child's
-                // next tap.
-                items(state.balloons.filter { !it.popped }, key = { it.id }) { balloon ->
+                // Emit EVERY balloon, popped or not, to items(...) -- never
+                // filter the list. A LazyVerticalGrid fills cells in list
+                // order, so removing an item reflows every later item back
+                // one slot on every single pop. Instead, popped balloons
+                // render as an invisible, non-clickable placeholder of the
+                // same size (see [BalloonView]'s `popped` branch) so their
+                // cell stays occupied and no still-live balloon ever moves.
+                items(state.balloons, key = { it.id }) { balloon ->
                     BalloonView(
                         balloon = balloon,
                         wobbleTrigger = wobbleTriggers[balloon.id] ?: 0,
@@ -149,6 +178,16 @@ private fun TargetColorSwatch(color: Color, modifier: Modifier = Modifier) {
 @Composable
 private fun BalloonView(balloon: Balloon, wobbleTrigger: Int, onTap: () -> Unit) {
     val visualSize = MinTapTarget * balloon.size.coerceAtLeast(1f)
+
+    // Popped balloons still occupy their grid cell (see the caller's
+    // comment on why the balloon list is never filtered) but must neither
+    // be visible nor tappable. A same-size, alpha-0, non-clickable Box
+    // keeps the cell's dimensions in the grid layout without drawing or
+    // reacting to touch.
+    if (balloon.popped) {
+        Box(modifier = Modifier.size(visualSize).padding(4.dp))
+        return
+    }
 
     // A soft scale-bounce on a wrong tap -- visible, non-punitive feedback
     // that works even with sound off.
