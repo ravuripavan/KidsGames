@@ -3,6 +3,10 @@ package com.kidsgames.designkit
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.SoundPool
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 
 /**
  * Wraps [SoundPool] with a fixed set of cues. Games reference cues by name,
@@ -45,4 +49,20 @@ class SoundBank(private val context: Context) {
         soundPool.release()
         loadedSoundIds.clear()
     }
+}
+
+/**
+ * Creates a [SoundBank] scoped to the current composition and releases it
+ * automatically via [DisposableEffect] when the composable leaves
+ * composition, so games never have to remember to call [SoundBank.release]
+ * themselves. Prefer this over `remember { SoundBank(context) }`.
+ */
+@Composable
+fun rememberSoundBank(): SoundBank {
+    val context = LocalContext.current
+    val soundBank = remember(context) { SoundBank(context) }
+    DisposableEffect(soundBank) {
+        onDispose { soundBank.release() }
+    }
+    return soundBank
 }

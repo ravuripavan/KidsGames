@@ -20,14 +20,19 @@ val MinTapTarget = 64.dp
  * The one tappable-thing composable used everywhere in the suite. Enforces
  * the 64dp minimum tap target internally so no game has to remember to.
  *
- * The guarantee is structural, not advisory: the outer node that carries
- * [defaultMinSize] and `clickable` is owned entirely by this composable and
- * never receives the caller's [modifier]. The caller's modifier is applied
- * only to an inner visual layer, so a caller passing e.g.
- * `Modifier.size(40.dp).padding(4.dp)` can shrink how the button *looks* but
- * can never shrink the touch node below [MinTapTarget] — there is no
- * modifier chain a caller can construct that reaches the outer node's
- * constraints.
+ * [modifier] and [layoutModifier] are NOT interchangeable: [layoutModifier]
+ * is applied to the outer, real-touch-target node — use it for any
+ * parent-data or layout modifier (`weight`, `align`, `fillMaxWidth`,
+ * `aspectRatio`) that must actually influence how the parent measures and
+ * places this button — while [modifier] only styles the inner visual layer
+ * and is invisible to the parent's measurement pass.
+ *
+ * The min-tap-target guarantee is structural, not advisory: [layoutModifier]
+ * is placed *before* [defaultMinSize] in the outer chain, so it can supply
+ * parent data and alter how the parent sizes this node, but it cannot
+ * override the `defaultMinSize` constraint applied afterward in the same
+ * chain — there is no modifier a caller can pass in [layoutModifier] or
+ * [modifier] that shrinks the touch node below [MinTapTarget].
  *
  * Note for tests: `testTag()` semantics deliberately do not merge upward in
  * Compose, so a `testTag` placed on [modifier] (which lands on the inner
@@ -39,6 +44,7 @@ val MinTapTarget = 64.dp
 fun KidButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    layoutModifier: Modifier = Modifier,
     testTag: String? = null,
     content: @Composable () -> Unit,
 ) {
@@ -46,10 +52,13 @@ fun KidButton(
     KidTapHaptics(interactionSource)
     Box(
         // Outer node: owns the tap target guarantee and the click handling.
-        // Deliberately does NOT incorporate the caller's modifier, so no
-        // combination of size/padding modifiers passed in can defeat
-        // defaultMinSize by fixing this node's constraints upstream.
-        modifier = Modifier
+        // layoutModifier is applied first so a caller's parent-data/layout
+        // modifiers (weight, align, fillMaxWidth, aspectRatio) reach the
+        // parent's measurement of THIS node — but defaultMinSize is chained
+        // after it, so no combination of modifiers passed via layoutModifier
+        // (or via modifier, which never reaches this node at all) can defeat
+        // the minimum tap target.
+        modifier = layoutModifier
             .defaultMinSize(minWidth = MinTapTarget, minHeight = MinTapTarget)
             .background(KidPalette.Surface, RoundedCornerShape(16.dp))
             .clickable(
