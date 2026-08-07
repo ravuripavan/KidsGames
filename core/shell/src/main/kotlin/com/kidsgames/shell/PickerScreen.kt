@@ -2,6 +2,7 @@ package com.kidsgames.shell
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -27,13 +28,14 @@ fun PickerScreen(
 ) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 96.dp),
-        modifier = modifier.background(KidPalette.Background),
+        modifier = modifier.fillMaxSize().background(KidPalette.Background),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
     ) {
         items(registry.games) { game ->
             KidButton(
                 onClick = { onGameSelected(game) },
                 modifier = Modifier.padding(8.dp),
+                testTag = "game_tile_${game.id}",
             ) {
                 Image(
                     painter = painterResource(id = game.icon),

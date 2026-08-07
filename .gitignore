@@ -35,3 +35,6 @@ google-services.json
 
 # Kotlin incremental compilation cache
 .kotlin/
+
+# Stray scratch captures
+scratch_*.png
