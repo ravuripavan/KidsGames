@@ -96,13 +96,12 @@ import kotlinx.coroutines.launch
  * recorded, listened for, or evaluated -- there is no audio *input* code
  * path in this file at all, only playback triggers.
  *
- * MISSING FROM :core:designkit: there is no [SoundBank.Cue] for "speak this
- * catalogue word" (only TAP/SUCCESS/GENTLE_RETRY/CELEBRATION exist), and
- * [VocabItem.audio] is a [PlaceholderAssets] integer with no real recording
- * behind it yet. Tapping the speaker therefore plays [SoundBank.Cue.TAP] as
- * a generic acknowledgement and drives a visible "speaking" animation on the
- * glyph -- the closest honest stand-in with what exists today, not a local
- * reimplementation of real word-audio playback.
+ * Tapping the speaker calls [SoundBank.playRaw] with the item's own audio
+ * id. No recordings exist yet -- [VocabItem.audio] is still a placeholder
+ * integer -- so playback is a silent no-op today and starts working the
+ * moment real audio lands, with no change here. The visible "speaking"
+ * animation on the glyph carries the moment regardless, which is what keeps
+ * the game legible while the catalogue is silent.
  */
 object WhatIsItGame : GameModule {
 
@@ -148,13 +147,17 @@ object WhatIsItGame : GameModule {
                     is Round.Name -> NamingRound(
                         item = round.item,
                         muted = muted,
-                        onSpeak = { soundBank.play(SoundBank.Cue.TAP) },
+                        onSpeak = { soundBank.playRaw(round.item.audio) },
                         onNext = { if (!celebrating) state = state.advance() },
                     )
                     is Round.Reverse -> ReverseRound(
                         round = round,
                         muted = muted,
-                        onSpeak = { soundBank.play(SoundBank.Cue.TAP) },
+                        onSpeak = {
+                            round.options
+                                .firstOrNull { it.id == round.targetId }
+                                ?.let { soundBank.playRaw(it.audio) }
+                        },
                         onTapOption = { itemId ->
                             if (!celebrating) {
                                 val next = state.tapReverseOption(itemId)
