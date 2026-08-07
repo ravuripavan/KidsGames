@@ -55,6 +55,67 @@ fallback rather than a hard column count.
 
 ---
 
+## `:games:colorsort` — parked 2026-08-06
+
+Three review rounds, three fix rounds. Builds green, 15 unit tests pass, levels 1
+to 4 are playable. Level 5 is not completable on a 360x640 device.
+
+**What works.** Bins are real uncoerced 64dp targets. The drag overlay draws at
+provably the same coordinates the drop is judged against. The bin hit-test resolves
+to the nearest centre, so an accurate drop can no longer be credited to a
+neighbour. Every item carries a dot-count badge independent of colour, with a
+pairwise test proving any two differently-coloured items differ by something other
+than hue. Haptics, `SoundBank` disposal, literal level-content tests, immutable
+pure state, no fail states.
+
+**Why it is parked — the content spec is the problem, not the code.**
+
+Level 5 asks for 24 items across 8 bins. At the 64dp touch-target floor an item
+slot is 72dp, so 24 items in four columns is six rows: `6x72 + 5x8 + 16 = 488dp`
+of items, plus a 172dp bin block, against roughly 396dp of item viewport on a
+360x640 device. It does not fit, and no arrangement fixes it: fewer columns makes
+the grid taller, and smaller items break the 64dp floor.
+
+Round 3 responded honestly — it declined to assert another false budget and made
+the item area scroll. But that reproduces round 1's rejected finding with a smaller
+target. Every surface not covered by a 72dp draggable item is 16dp or narrower,
+`detectDragGestures` consumes any pointer that touches an item, and the one
+full-height 16dp stripe sits inside the system gesture-navigation inset, where a
+horizontal swipe triggers Back and leaves the game. A 4-6 year old's finger contact
+patch is 7-10mm; the scroll target is about 2.5mm. The scroll is also
+undiscoverable: no scrollbar, no edge fade, no hint, and a non-reader has no signal
+that four more shapes exist below the fold.
+
+Separately, the 96dp exit-button clearance is scrollable content rather than
+reserved screen space, so at every scroll offset except maximum the leftmost item
+column sits under `GameHost`'s exit button — a child reaching for the bottom-left
+shape leaves the game mid-level.
+
+**Why this needs a human decision rather than a fourth round.** The three rounds
+were spent fixing implementation, and the implementation is now largely correct.
+The finding is that the level's designed content does not fit the device. Changing
+it changes what the game contains, which is a product decision, not a bug fix.
+
+`ITEMS_PER_BIN` is a module-private constant — the spec only says level 5 sorts by
+"colour, shape and size" and never mandates 24 items — so the change does not
+require a spec amendment.
+
+**Recommended, from the reviewer.** Split level 5 into two sequential sub-rounds of
+12: first the four LARGE bins, then the four SMALL bins. Per sub-round the layout
+is `96dp` of bins plus `248dp` of items plus a fixed 96dp bottom inset = 440dp,
+comfortably inside 568dp on the smallest device, with no scrolling at any level and
+`verticalScroll` deleted entirely. Size still discriminates, because the child sees
+both sizes of the same colour and shape across the two sub-rounds.
+
+Alternative: `ITEMS_PER_BIN = 2` at level 5 only, giving 16 items in four rows.
+Simpler, but still needs padding trimmed to clear the exit inset on a 640dp device,
+and updates the level-content test to `6, 9, 12, 12, 16`.
+
+Either way, the exit clearance must become fixed bottom padding on the outer
+column, outside any scrollable region, so it holds unconditionally.
+
+---
+
 ## Cross-cutting issues found while reviewing (not module defects)
 
 **Edge-to-edge with no insets applied.** `MainActivity` calls `enableEdgeToEdge()`

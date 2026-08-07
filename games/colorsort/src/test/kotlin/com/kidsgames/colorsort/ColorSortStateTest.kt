@@ -83,25 +83,29 @@ class ColorSortStateTest {
     }
 
     @Test
-    fun `required placements are non-decreasing across levels one through five`() {
+    fun `required placements match the documented literal sequence, six nine twelve twelve twenty-four`() {
+        // Asserted against the LITERAL spec values, not re-derived from the
+        // state class -- a version that produced 6,6,6,6,6 items would still
+        // pass a self-referential "non-decreasing" check, so this pins the
+        // actual designed sequence instead.
         val requiredByLevel = (1..5).map { ColorSortState(level = it).items.size }
-        for (i in 1 until requiredByLevel.size) {
-            assertTrue(
-                "required placements dropped from level $i (${requiredByLevel[i - 1]}) " +
-                    "to level ${i + 1} (${requiredByLevel[i]})",
-                requiredByLevel[i] >= requiredByLevel[i - 1],
-            )
-        }
+        assertEquals(listOf(6, 9, 12, 12, 24), requiredByLevel)
     }
 
     @Test
-    fun `discrimination difficulty is non-decreasing -- bin count never drops`() {
+    fun `bin count matches the documented literal sequence, two three four four eight`() {
         val binCountByLevel = (1..5).map { ColorSortState(level = it).bins.size }
-        for (i in 1 until binCountByLevel.size) {
+        assertEquals(listOf(2, 3, 4, 4, 8), binCountByLevel)
+    }
+
+    @Test
+    fun `bin drop tolerance margin never decreases across levels one through five`() {
+        val marginByLevel = (1..5).map { ColorSortGeometry.marginDpFor(it) }
+        for (i in 1 until marginByLevel.size) {
             assertTrue(
-                "bin count dropped from level $i (${binCountByLevel[i - 1]}) " +
-                    "to level ${i + 1} (${binCountByLevel[i]})",
-                binCountByLevel[i] >= binCountByLevel[i - 1],
+                "drop tolerance margin dropped from level $i (${marginByLevel[i - 1]}) " +
+                    "to level ${i + 1} (${marginByLevel[i]})",
+                marginByLevel[i] >= marginByLevel[i - 1],
             )
         }
     }

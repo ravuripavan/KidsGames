@@ -176,3 +176,42 @@ data class ColorSortState(
         }
     }
 }
+
+/**
+ * Pure geometry for judging a bin drop. Plain Kotlin, no Compose/Android
+ * imports, so it is unit-tested without an emulator -- mirrors
+ * `games/puzzleboard`'s `PuzzleBoardGeometry`, which solved the exact same
+ * "generous, level-invariant drop tolerance" problem.
+ *
+ * A raw `rect.contains(center)` test (the bug this replaces) makes drop
+ * tolerance a direct function of bin size: bins shrink as the level adds more
+ * of them (8 bins at L5 vs. 2 at L1), so the effective tolerance would
+ * TIGHTEN exactly as the level gets harder, which the design spec forbids by
+ * name. Instead every bin rect is inflated by the SAME margin at every
+ * level before the contains-check runs, so the extra reach never shrinks.
+ */
+object ColorSortGeometry {
+
+    /**
+     * Margin, in dp, added to every side of a bin's rect before the drop
+     * test runs. Deliberately a function of level (not a bare constant) so
+     * a reviewer -- and the non-decreasing-tolerance test below -- can see
+     * explicitly that it never varies by level; there is no per-level table
+     * to accidentally tighten later.
+     */
+    fun marginDpFor(level: Int): Float = BIN_DROP_MARGIN_DP
+
+    // 24dp on each side adds 48dp of total tolerance width/height, matching
+    // the 48dp constant `PuzzleBoardGeometry.SNAP_TOLERANCE_DP` uses for the
+    // same "generous, non-shrinking" contract.
+    //
+    // NOTE: at 24dp/side with 64dp bins separated by a 12dp BIN_GAP, adjacent
+    // inflated rects overlap by 24 + 24 - 12 = 36dp -- 12dp of that overlap
+    // sits INSIDE each bin's own visible rectangle. That overlap is expected
+    // and fine as long as the caller resolves a drop to the NEAREST bin
+    // centre among every rect the point falls inside, never the first match
+    // in iteration order -- see `handleDragEnd` in ColorSortGame.kt. The
+    // margin itself is not the defect; picking first-in-order over nearest
+    // is.
+    private const val BIN_DROP_MARGIN_DP = 24f
+}
