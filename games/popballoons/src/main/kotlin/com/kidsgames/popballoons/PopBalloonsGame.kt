@@ -35,7 +35,6 @@ import com.kidsgames.designkit.KidButton
 import com.kidsgames.designkit.KidPalette
 import com.kidsgames.designkit.MinTapTarget
 import com.kidsgames.designkit.SoundBank
-import com.kidsgames.designkit.kidTapFeedback
 import com.kidsgames.gameapi.AgeBand
 import com.kidsgames.gameapi.GameModule
 import com.kidsgames.gameapi.Outcome
@@ -186,8 +185,7 @@ private fun BalloonView(balloon: Balloon, wobbleTrigger: Int, onTap: () -> Unit)
             .size(visualSize)
             .offset(y = drift.dp)
             .scale(wobble.value)
-            .padding(4.dp)
-            .kidTapFeedback(),
+            .padding(4.dp),
     ) {
         Box(
             modifier = Modifier
