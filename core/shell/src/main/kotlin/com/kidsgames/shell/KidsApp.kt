@@ -45,6 +45,12 @@ fun KidsApp(registry: GameRegistry, progressStore: ProgressStore, onExitApp: () 
     var activeGame by remember { mutableStateOf<GameModule?>(null) }
     var activeLevel by remember { mutableStateOf(1) }
     var sessionState by remember { mutableStateOf(SessionState()) }
+    // Bumped only AFTER a completion has actually been written to the store.
+    // The picker keys its read on this rather than on sessionState, because
+    // sessionState changes the instant a game ends while recordCompletion is
+    // still in flight -- the picker then read the OLD level and showed a
+    // child the same level again, with a stale chooser to match.
+    var progressWrites by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
     val safeAreaModifier = Modifier
         .fillMaxSize()
@@ -56,11 +62,11 @@ fun KidsApp(registry: GameRegistry, progressStore: ProgressStore, onExitApp: () 
             SessionOrchestrator.suggestNext(registry.games, sessionState)
         }
         // The picker needs every game's highest level to draw its dots and
-        // to know which levels a press-and-hold may offer. Read once when
-        // the picker appears, and again whenever a game finishes, since
-        // that is the only thing that can raise a level.
+        // to know which levels a press-and-hold may offer. Keyed on
+        // progressWrites, which only advances once a completion has landed
+        // in the store, so this can never read ahead of the write.
         var highestLevels by remember { mutableStateOf(emptyMap<String, Int>()) }
-        LaunchedEffect(registry.games, sessionState) {
+        LaunchedEffect(registry.games, progressWrites) {
             highestLevels = registry.games.associate { it.id to progressStore.levelFor(it.id) }
         }
 
@@ -98,6 +104,9 @@ fun KidsApp(registry: GameRegistry, progressStore: ProgressStore, onExitApp: () 
             if (outcome == Outcome.Completed) {
                 scope.launch {
                     progressStore.recordCompletion(game.id, activeLevel)
+                    // Only now is the new level readable. Bumping before the
+                    // await would reintroduce the race this replaced.
+                    progressWrites++
                 }
                 sessionState = sessionState.copy(playedIds = sessionState.playedIds + game.id)
             }
