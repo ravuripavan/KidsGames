@@ -40,6 +40,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -469,11 +471,30 @@ private fun RotateBadge(modifier: Modifier = Modifier) {
     }
 }
 
-/** A live tray shape is always drawn filled, at its current rotation. */
+/**
+ * A live tray shape is always drawn filled, at its current rotation -- now
+ * with depth: a soft dropped shadow beneath it, the body, and a darker
+ * outline on top.
+ *
+ * All three passes go through [drawShapeOutline] with the SAME [kind], so
+ * every one of them is the identical silhouette. Nothing here introduces a
+ * second geometry: this game's whole premise is that a hole and its shape are
+ * the same outline, and `rendersIdentically` decides matches from each kind's
+ * exact rotational symmetry period. Restyling had to be additive passes over
+ * the existing path rather than a new drawing routine, or the puzzle itself
+ * would shift underneath the art.
+ *
+ * The shadow is drawn INSIDE a translate of a small fraction of the height,
+ * so it scales with the shape and cannot detach from it at any size.
+ */
 @Composable
 private fun ShapeIcon(kind: ShapeKind, color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
+        translate(top = size.height * 0.045f) {
+            drawShapeOutline(kind, Color.Black.copy(alpha = 0.20f), filled = true)
+        }
         drawShapeOutline(kind, color, filled = true)
+        drawShapeOutline(kind, lerp(color, Color.Black, 0.42f), filled = false)
     }
 }
 

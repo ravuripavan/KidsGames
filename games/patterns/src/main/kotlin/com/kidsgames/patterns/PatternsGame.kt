@@ -28,6 +28,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -436,30 +441,105 @@ private fun ChoiceButton(level: Int, category: Int, onTap: () -> Unit, modifier:
  * [PatternsVisual], which varies by level (see its KDoc for why L5's set
  * differs from L4's).
  */
+/**
+ * A pattern piece, drawn as a CHARACTER rather than a flat block: a vertical
+ * light-to-dark gradient body, a darker outline, a soft top highlight and a
+ * pair of eyes.
+ *
+ * Deliberately still drawn rather than a bundled sprite. The staged art pack
+ * has no triangle -- and a triangle appears in EVERY level of this game --
+ * so a sprite set could only have been completed by substituting some other
+ * form for it, which would change what the pattern actually is. Drawing keeps
+ * the geometry exactly what it was (circle, 8dp-rounded square, and the same
+ * three-point triangle as before) while giving it the depth the flat fills
+ * lacked; the shape a child must match is untouched.
+ */
 @Composable
 private fun PieceGlyph(level: Int, category: Int, size: Dp) {
     val visual = PatternsVisual.visualFor(level, category)
-    when (visual.shape) {
-        PatternShape.CIRCLE -> Box(
-            modifier = Modifier.size(size).background(visual.color, CircleShape),
-        )
-
-        PatternShape.SQUARE -> Box(
-            modifier = Modifier.size(size).background(visual.color, RoundedCornerShape(8.dp)),
-        )
-
-        PatternShape.TRIANGLE -> androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
-            drawTriangle(visual.color)
-        }
+    androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
+        drawPatternPiece(visual.shape, visual.color)
     }
 }
 
-private fun DrawScope.drawTriangle(color: Color) {
-    val path = Path().apply {
-        moveTo(size.width / 2f, 0f)
-        lineTo(size.width, size.height)
-        lineTo(0f, size.height)
-        close()
+/** Blend toward white. */
+private fun lighten(color: Color, amount: Float): Color = lerp(color, Color.White, amount)
+
+/** Blend toward black. */
+private fun darken(color: Color, amount: Float): Color = lerp(color, Color.Black, amount)
+
+private fun DrawScope.drawPatternPiece(shape: PatternShape, color: Color) {
+    val w = size.width
+    val h = size.height
+    val body = Brush.verticalGradient(
+        colors = listOf(lighten(color, 0.34f), color, darken(color, 0.22f)),
+    )
+    val outline = darken(color, 0.45f)
+    val stroke = (w * 0.07f).coerceAtLeast(2f)
+    val inset = stroke / 2f
+
+    // Eye baseline differs per form: a triangle's mass sits low, so eyes
+    // placed at the geometric centre would land in the narrow apex.
+    val eyeY: Float
+
+    when (shape) {
+        PatternShape.CIRCLE -> {
+            val r = w / 2f - inset
+            drawCircle(brush = body, radius = r, center = Offset(w / 2f, h / 2f))
+            drawCircle(color = outline, radius = r, center = Offset(w / 2f, h / 2f), style = Stroke(stroke))
+            eyeY = h * 0.44f
+        }
+
+        PatternShape.SQUARE -> {
+            val corner = CornerRadius(w * 0.18f, w * 0.18f)
+            drawRoundRect(
+                brush = body,
+                topLeft = Offset(inset, inset),
+                size = Size(w - stroke, h - stroke),
+                cornerRadius = corner,
+            )
+            drawRoundRect(
+                color = outline,
+                topLeft = Offset(inset, inset),
+                size = Size(w - stroke, h - stroke),
+                cornerRadius = corner,
+                style = Stroke(stroke),
+            )
+            eyeY = h * 0.44f
+        }
+
+        PatternShape.TRIANGLE -> {
+            // Same three points as the flat version: apex top-centre, base
+            // corners bottom-left and bottom-right.
+            val path = Path().apply {
+                moveTo(w / 2f, inset)
+                lineTo(w - inset, h - inset)
+                lineTo(inset, h - inset)
+                close()
+            }
+            drawPath(path, brush = body)
+            drawPath(path, color = outline, style = Stroke(stroke))
+            eyeY = h * 0.66f
+        }
     }
-    drawPath(path, color = color)
+
+    drawFace(w = w, eyeY = eyeY, outline = outline)
+}
+
+/**
+ * Two eyes with a highlight. Colour is never the carrier here -- every piece
+ * gets the same face, so the face adds appeal without adding a channel a
+ * child has to read.
+ */
+private fun DrawScope.drawFace(w: Float, eyeY: Float, outline: Color) {
+    val eyeR = w * 0.11f
+    val pupilR = eyeR * 0.55f
+    val dx = w * 0.17f
+    val cx = w / 2f
+    for (side in listOf(-1f, 1f)) {
+        val ex = cx + side * dx
+        drawCircle(color = Color.White, radius = eyeR, center = Offset(ex, eyeY))
+        drawCircle(color = outline, radius = eyeR, center = Offset(ex, eyeY), style = Stroke(w * 0.02f))
+        drawCircle(color = Color(0xFF2B2B2B), radius = pupilR, center = Offset(ex, eyeY + eyeR * 0.12f))
+    }
 }
