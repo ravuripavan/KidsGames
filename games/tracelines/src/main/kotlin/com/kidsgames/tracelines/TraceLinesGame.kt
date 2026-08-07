@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,16 +42,18 @@ import kotlinx.coroutines.delay
  * state, and this composable holds it in a single `mutableStateOf` per the
  * house rule (no separate version/trigger counter).
  *
- * LAYOUT BUDGET (write it down before building -- GameHost hands this
- * composable exactly 360 x 544dp; the 96dp bottom exit strip is already
- * reserved by the shell and NOT part of this 544dp, so nothing here needs to
- * carve out room for it):
+ * LAYOUT BUDGET (write it down before building -- after safeDrawing insets
+ * plus the shell's reserved 96dp bottom exit strip, GameHost hands this
+ * composable roughly 360 x 496dp on a typical device; the exact figure
+ * varies with insets, which is why the code below measures its real
+ * BoxWithConstraints size rather than trusting a hardcoded number):
  *   - Outer padding: 24dp on every side.
- *   - Available content box: (360 - 48) x (544 - 48) = 312 x 496dp.
- *   - The trace square is sized to the SMALLER of those two, i.e. 312dp,
- *     and centred in the remaining 312 x 496dp box (92dp of unused vertical
- *     space split above/below -- deliberate breathing room, not a packed
- *     fit, per "leave real margin").
+ *   - Available content box: roughly (360 - 48) x (496 - 48) = 312 x 448dp.
+ *   - The trace square is sized to the SMALLER of those two via
+ *     `minOf(maxWidth, maxHeight)` from the real BoxWithConstraints below,
+ *     and centred in the remaining box -- verified to leave well over 100dp
+ *     of unused vertical space split above/below (deliberate breathing
+ *     room, not a packed fit, per "leave real margin").
  *   - 312dp comfortably clears the 64dp minimum touch target many times
  *     over; nothing here is smaller than 64dp because the trace itself, not
  *     a small button, is the touch surface.
@@ -176,14 +179,31 @@ private fun TraceSquare(
     Box(
         modifier = Modifier
             .size(sideDp)
+            // TWO CHAINED pointerInput modifiers, not one block launching two
+            // detectors. A single block would hit `coroutineScope { launch; launch }`,
+            // and `launch` defaults to a DISPATCHED start on AndroidUiDispatcher --
+            // so neither detector has registered when the first DOWN is dispatched,
+            // and the entire first stroke after entering a level is silently
+            // swallowed. Two modifiers give two pointer-input nodes, each
+            // registering synchronously. Same shape as games/matchshapes.
             .pointerInput(state.level, enabled) {
                 if (!enabled) return@pointerInput
                 val scale = TraceLineState.VIRTUAL_SIZE / size.width.toFloat()
                 detectDragGestures(
+                    onDragStart = { start ->
+                        onTrace(start.x * scale, start.y * scale)
+                    },
                     onDrag = { change, _ ->
                         change.consume()
                         onTrace(change.position.x * scale, change.position.y * scale)
                     },
+                )
+            }
+            .pointerInput(state.level, enabled) {
+                if (!enabled) return@pointerInput
+                val scale = TraceLineState.VIRTUAL_SIZE / size.width.toFloat()
+                detectTapGestures(
+                    onTap = { tap -> onTrace(tap.x * scale, tap.y * scale) },
                 )
             },
     ) {
@@ -198,15 +218,29 @@ private fun TraceSquare(
             }
 
             // Every dot is always drawn, filled or not -- nothing is ever
-            // removed from the layout or hidden.
+            // removed from the layout or hidden. Unfilled dots are drawn
+            // FIRST and filled dots SECOND so a closed shape whose start and
+            // end share a coordinate (e.g. level 4's square) still shows the
+            // filled "begin here" marker on top, rather than a later grey
+            // unfilled dot painting over it.
             val dotRadius = 6.dp.toPx()
             state.path.forEachIndexed { index, point ->
-                val filled = index <= state.filledUpTo
-                drawCircle(
-                    color = if (filled) KidPalette.Blue else KidPalette.OnSurface.copy(alpha = 0.25f),
-                    radius = dotRadius,
-                    center = toPx(point),
-                )
+                if (index > state.filledUpTo) {
+                    drawCircle(
+                        color = KidPalette.OnSurface.copy(alpha = 0.25f),
+                        radius = dotRadius,
+                        center = toPx(point),
+                    )
+                }
+            }
+            state.path.forEachIndexed { index, point ->
+                if (index <= state.filledUpTo) {
+                    drawCircle(
+                        color = KidPalette.Blue,
+                        radius = dotRadius,
+                        center = toPx(point),
+                    )
+                }
             }
 
             // The filled-in line itself, drawn as a thick stroke through all

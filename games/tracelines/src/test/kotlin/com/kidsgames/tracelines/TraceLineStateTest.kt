@@ -124,13 +124,60 @@ class TraceLineStateTest {
 
     @Test
     fun `tolerance is identical across all five levels and never shrinks`() {
-        // Tolerance is a single fixed constant used by every level -- assert
-        // it directly rather than via behavior, so a future change that
-        // makes tolerance level-dependent fails loudly here.
+        // Exercise the REAL code path at every level: a touch offset by
+        // exactly (TOLERANCE - 1) from the next path point must register at
+        // every level, and one offset by (TOLERANCE + 1) must not. If a
+        // future change ever makes the effective tolerance level-dependent
+        // (e.g. shrinking it for higher levels), this fails loudly -- unlike
+        // comparing the constant to itself.
         assertEquals(34f, TraceLineState.TOLERANCE)
         for (level in 1..5) {
-            assertEquals(TraceLineState.TOLERANCE, TraceLineState.TOLERANCE)
+            val base = TraceLineState.initial(level)
+            val target = base.path[1]
+            // Perpendicular-ish offset via a small diagonal nudge so it
+            // doesn't accidentally land closer to a different path point.
+            val justInside = base.trace(target.x, target.y + TraceLineState.TOLERANCE - 1f)
+            assertTrue("level $level: within-tolerance touch must register", justInside.filledUpTo >= 1)
+
+            val justOutside = base.trace(target.x, target.y + TraceLineState.TOLERANCE + 1f)
+            assertEquals("level $level: outside-tolerance touch must not register", 0, justOutside.filledUpTo)
         }
+    }
+
+    @Test
+    fun `a long run of consecutive off-path traces bumps the wobble trigger exactly once per stray episode`() {
+        // ROOT CAUSE FIX: wobbleTrigger must mark an EDGE (on-path to
+        // off-path transition), not count every off-path sample. A
+        // continuous stray drag delivers many trace() calls per second; this
+        // must collapse to a single bump for the whole episode.
+        var s = TraceLineState.initial(1)
+        val before = s.wobbleTrigger
+
+        repeat(100) {
+            s = s.trace(-500f, -500f)
+        }
+        assertEquals(
+            "100 consecutive off-path samples must bump the trigger exactly once",
+            before + 1,
+            s.wobbleTrigger,
+        )
+
+        // Re-enter the path: this must clear the stray latch without itself
+        // bumping the trigger.
+        val onPath = s.path[1]
+        s = s.trace(onPath.x, onPath.y)
+        assertEquals("re-entering the path must not bump the trigger", before + 1, s.wobbleTrigger)
+
+        // Stray again: a second, distinct episode must bump the trigger a
+        // second time.
+        repeat(50) {
+            s = s.trace(-500f, -500f)
+        }
+        assertEquals(
+            "a second stray episode must bump the trigger again, exactly once",
+            before + 2,
+            s.wobbleTrigger,
+        )
     }
 
     @Test
@@ -183,6 +230,77 @@ class TraceLineStateTest {
             }
         }
     }
+
+    @Test
+    fun `a correct trace along the path, however slow, never bumps the wobble trigger`() {
+        // ROOT CAUSE FIX: straying must be a DISTANCE test, not a
+        // "did this sample advance filledUpTo" test. A finger walking
+        // exactly along the path in tiny steps (slower than one
+        // dot-spacing per event) must never be flagged as straying, at any
+        // level, at any step size.
+        for (level in 1..5) {
+            for (stepUnits in listOf(2f, 5f)) {
+                var s = TraceLineState.initial(level)
+                val startTrigger = s.wobbleTrigger
+                val path = s.path
+                for (i in 0 until path.lastIndex) {
+                    val a = path[i]
+                    val b = path[i + 1]
+                    val segLen = distanceBetween(a, b)
+                    val steps = maxOf(1, (segLen / stepUnits).toInt())
+                    for (step in 1..steps) {
+                        val t = step / steps.toFloat()
+                        val x = a.x + (b.x - a.x) * t
+                        val y = a.y + (b.y - a.y) * t
+                        s = s.trace(x, y)
+                    }
+                }
+                assertEquals(
+                    "level $level at $stepUnits units/event: a correct trace must never bump the wobble trigger",
+                    startTrigger,
+                    s.wobbleTrigger,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a genuine off-path excursion still produces exactly one stray bump`() {
+        var s = TraceLineState.initial(3)
+        val before = s.wobbleTrigger
+        s = s.trace(-999f, -999f)
+        assertEquals(before + 1, s.wobbleTrigger)
+    }
+
+    @Test
+    fun `the latch clears on re-entering the path even without advancing, allowing a second bump`() {
+        var s = TraceLineState.initial(1)
+        val before = s.wobbleTrigger
+
+        // First, make some forward progress.
+        val p1 = s.path[1]
+        s = s.trace(p1.x, p1.y)
+        val filledAfterFirstAdvance = s.filledUpTo
+        assertTrue(filledAfterFirstAdvance > 0)
+
+        // Stray far away: bumps the trigger once.
+        s = s.trace(-500f, -500f)
+        assertEquals(before + 1, s.wobbleTrigger)
+
+        // Return to a point BEHIND the frontier -- this fills no new dot,
+        // but it is still on the path, so the latch must clear silently.
+        val behindFrontier = s.path[0]
+        s = s.trace(behindFrontier.x, behindFrontier.y)
+        assertEquals("returning to the path without advancing must not itself bump the trigger", before + 1, s.wobbleTrigger)
+        assertEquals("returning behind the frontier must not reduce progress", filledAfterFirstAdvance, s.filledUpTo)
+
+        // Stray again: this is now a fresh episode since the latch cleared.
+        s = s.trace(-500f, -500f)
+        assertEquals("the cleared latch must allow a second, distinct bump", before + 2, s.wobbleTrigger)
+    }
+
+    private fun distanceBetween(a: TracePoint, b: TracePoint): Float =
+        kotlin.math.hypot((b.x - a.x).toDouble(), (b.y - a.y).toDouble()).toFloat()
 
     @Test
     fun `level 4 path is a closed shape -- starts and ends at the same point`() {

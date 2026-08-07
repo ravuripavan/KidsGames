@@ -43,6 +43,17 @@ data class TraceLineState(
     val filledUpTo: Int = 0,
     val wobbleTrigger: Int = 0,
     val finished: Boolean = false,
+    /**
+     * True while the child's finger is currently off the path, i.e. mid
+     * "stray episode". This is the latch: [wobbleTrigger] increments only on
+     * the false->true EDGE of this flag, not once per off-path sample, so a
+     * continuous stray drag (which can deliver 60-120 [trace] calls per
+     * second) produces exactly ONE cue/flash for the whole episode instead of
+     * one per frame. It clears the instant the child re-enters the path
+     * (forward progress) or the path finishes, so straying again afterward
+     * is a fresh episode and bumps the trigger again.
+     */
+    private val straying: Boolean = false,
 ) {
 
     /**
@@ -64,13 +75,43 @@ data class TraceLineState(
             }
         }
 
-        return if (newFilled > filledUpTo) {
-            copy(filledUpTo = newFilled, finished = newFilled == path.lastIndex)
-        } else {
-            // Off the path: no progress lost, just a visible-but-gentle
-            // wobble cue. The child can move back toward the frontier and
-            // resume at any time -- never a reset.
-            copy(wobbleTrigger = wobbleTrigger + 1)
+        // The stray predicate is an actual DISTANCE test against the whole
+        // path, never a question of whether the sample advanced the
+        // frontier. A finger sitting exactly on the ink but moving slower
+        // than one dot-spacing per event advances nothing, yet it is not
+        // straying -- it is simply close to a point it has already filled,
+        // or close to a point ahead it hasn't reached yet. Only a touch
+        // that is genuinely far from every point on the path counts as off
+        // the line.
+        val nearestPathDistance = path.minOf { distance(x, y, it.x, it.y) }
+        val onPath = nearestPathDistance <= TOLERANCE
+
+        return when {
+            newFilled > filledUpTo -> {
+                // Forward progress: clear the stray latch so a future stray
+                // episode is treated as new.
+                copy(filledUpTo = newFilled, finished = newFilled == path.lastIndex, straying = false)
+            }
+            onPath -> {
+                // No new dot filled, but the touch is still within
+                // tolerance of the path (e.g. retracing behind the
+                // frontier). This clears the latch without any cue or
+                // flash, so a later genuine excursion is a fresh episode.
+                if (straying) copy(straying = false) else this
+            }
+            straying -> {
+                // Still mid-stray-episode: no new cue, no new flash -- this
+                // is the fix for the "error buzzer" bug. Progress is
+                // untouched.
+                this
+            }
+            else -> {
+                // The false->true EDGE of straying: exactly one wobble bump
+                // per episode, not one per off-path sample. The child can
+                // move back toward the path and resume at any time -- never
+                // a reset.
+                copy(wobbleTrigger = wobbleTrigger + 1, straying = true)
+            }
         }
     }
 
