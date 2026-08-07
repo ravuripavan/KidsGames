@@ -30,6 +30,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
@@ -442,43 +445,103 @@ private fun starPath(width: Float, height: Float, points: Int): Path {
  * IDENTICAL -- there is no separate overlay layer that could drift out of
  * sync with what [CarWashState.scrub] is judging.
  */
+/**
+ * The car and its dirt, back on ONE Canvas so the drawn surface and the
+ * surface the drag gesture reads coordinates from are identical.
+ *
+ * This car is DRAWN, deliberately, after a bundled sprite was tried and
+ * reverted. The only top-down car in the staged art pack is 71x131px, which
+ * is ample at carrace's ~45dp but has to be magnified across this module's
+ * entire play area, where it rendered as a large, visibly blurry blob --
+ * worse than the crisp vector it replaced. Resolution, not style, is the
+ * reason. The drawing below keeps the vector's sharpness at any size and
+ * takes the depth treatment used elsewhere: gradient body, darker outline,
+ * glass highlight, wheel rims.
+ */
 @Composable
 private fun CarCanvas(dirt: List<Float>) {
-    // The car is now real artwork rather than drawn primitives, which means
-    // it can no longer share one Canvas with the dirt. The sync guarantee is
-    // preserved a different way: the Image and the dirt Canvas are siblings
-    // in ONE Box and BOTH fillMaxSize, so they are laid out in the identical
-    // rectangle. The dirt grid therefore still maps onto exactly the pixels
-    // CarWashState.scrub() judges -- there is no independently positioned or
-    // independently scaled overlay that could drift out of register.
-    Box(modifier = Modifier.fillMaxSize()) {
-        Image(
-            painter = painterResource(id = R.drawable.wash_car),
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize(),
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val bodyTop = h * 0.42f
+        val bodyBottom = h * 0.78f
+        val paint = KidPalette.Green
+        val shell = Brush.verticalGradient(
+            colors = listOf(
+                lerp(paint, Color.White, 0.30f),
+                paint,
+                lerp(paint, Color.Black, 0.22f),
+            ),
+            startY = h * 0.18f,
+            endY = bodyBottom,
         )
+        val edge = lerp(paint, Color.Black, 0.42f)
+        val stroke = (w * 0.014f).coerceAtLeast(2f)
+
+        val roofPath = Path().apply {
+            moveTo(w * 0.22f, bodyTop)
+            lineTo(w * 0.32f, h * 0.2f)
+            lineTo(w * 0.68f, h * 0.2f)
+            lineTo(w * 0.78f, bodyTop)
+            close()
+        }
+        drawPath(roofPath, brush = shell)
+        drawPath(roofPath, color = edge, style = Stroke(stroke))
+
+        val bodyTopLeft = Offset(w * 0.06f, bodyTop)
+        val bodySize = androidx.compose.ui.geometry.Size(w * 0.88f, bodyBottom - bodyTop)
+        val bodyCorner = androidx.compose.ui.geometry.CornerRadius(w * 0.06f)
+        drawRoundRect(brush = shell, topLeft = bodyTopLeft, size = bodySize, cornerRadius = bodyCorner)
+        drawRoundRect(
+            color = edge,
+            topLeft = bodyTopLeft,
+            size = bodySize,
+            cornerRadius = bodyCorner,
+            style = Stroke(stroke),
+        )
+
+        // Windscreen, with a pale streak across it so the glass reads as
+        // glass rather than as a flat blue panel.
+        val glassTop = h * 0.24f
+        drawRoundRect(
+            color = KidPalette.Blue.copy(alpha = 0.55f),
+            topLeft = Offset(w * 0.36f, glassTop),
+            size = androidx.compose.ui.geometry.Size(w * 0.28f, bodyTop - glassTop - 4f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.02f),
+        )
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.35f),
+            topLeft = Offset(w * 0.37f, glassTop + (bodyTop - glassTop) * 0.15f),
+            size = androidx.compose.ui.geometry.Size(w * 0.26f, (bodyTop - glassTop) * 0.22f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.02f),
+        )
+
+        val wheelRadius = w * 0.09f
+        for (cx in listOf(w * 0.26f, w * 0.74f)) {
+            drawCircle(color = KidPalette.OnSurface, radius = wheelRadius, center = Offset(cx, bodyBottom))
+            drawCircle(
+                color = Color.White.copy(alpha = 0.55f),
+                radius = wheelRadius * 0.42f,
+                center = Offset(cx, bodyBottom),
+            )
+        }
 
         // Dirt overlay: one translucent brown blob per grid cell whose
         // dirt is still above zero, sized and centred on that cell -- the
         // SAME grid CarWashState.scrub() reads coordinates into.
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-            val cellW = w / CarWashState.GRID_COLS
-            val cellH = h / CarWashState.GRID_ROWS
-            for (row in 0 until CarWashState.GRID_ROWS) {
-                for (col in 0 until CarWashState.GRID_COLS) {
-                    val amount = dirt.getOrNull(row * CarWashState.GRID_COLS + col) ?: 0f
-                    if (amount <= 0f) continue
-                    val cx = cellW * (col + 0.5f)
-                    val cy = cellH * (row + 0.5f)
-                    drawCircle(
-                        color = DIRT_COLOR.copy(alpha = 0.55f * amount.coerceAtMost(1f)),
-                        radius = min(cellW, cellH) * 0.55f,
-                        center = Offset(cx, cy),
-                    )
-                }
+        val cellW = w / CarWashState.GRID_COLS
+        val cellH = h / CarWashState.GRID_ROWS
+        for (row in 0 until CarWashState.GRID_ROWS) {
+            for (col in 0 until CarWashState.GRID_COLS) {
+                val amount = dirt.getOrNull(row * CarWashState.GRID_COLS + col) ?: 0f
+                if (amount <= 0f) continue
+                val cx = cellW * (col + 0.5f)
+                val cy = cellH * (row + 0.5f)
+                drawCircle(
+                    color = DIRT_COLOR.copy(alpha = 0.55f * amount.coerceAtMost(1f)),
+                    radius = min(cellW, cellH) * 0.55f,
+                    center = Offset(cx, cy),
+                )
             }
         }
     }
