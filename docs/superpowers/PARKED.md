@@ -249,6 +249,68 @@ draws a ring, and a child cannot discover why they would want it.
 
 ---
 
+## `:games:countanimals` — parked 2026-08-07
+
+Three review rounds, three fix rounds, plus one integrator fix that turned out to
+cause a fourth blocker. Builds green, 26 tests pass, the state machine is clean, and
+levels 1 to 4 work. Level 5 does not survive a raised Display size.
+
+**What works.** The numeral picker's answer position genuinely varies between
+attempts — an earlier version seeded the shuffle on `level` and `total`, both fixed,
+so the answer sat at the same index forever and a child could clear it by tapping
+the same place. Level 4's two groups are real stacked containers with their own
+counts, and level 5 shows an addition without ever displaying the sum before the
+child answers. Digits are drawn as seven-segment glyphs, all ten verified correct,
+so the module needs no text exemption. Group colours are off the protan confusion
+axis and carry a circle-vs-square marker as well. Per-animal wobble is reachable on
+blocked taps. Literal difficulty map, bounded tests, `rememberSoundBank()`, no
+permissions, no network, no microphone, no fail states.
+
+**Why it is parked — two blockers, one root cause, and one of them is mine.**
+
+There is no `BoxWithConstraints` anywhere in this module. The layout budget lives in
+a KDoc comment, and both blockers are what happens when an asserted budget meets a
+device it was not written against.
+
+**B1, width.** The level-5 numeral picker needs 284dp of options, but the Row sits
+inside 24dp of its own horizontal padding and another 12dp from the group container,
+so it needs 356dp of screen. That is 4dp of margin on a stock 360dp phone and
+negative on anything narrower — at a 1.1x Display size the third button is squeezed
+to about 55dp with its digit and pips overlapping its neighbour. Because the answer
+index genuinely varies, roughly one attempt in three puts the answer in that slot
+and the level cannot be finished on that attempt.
+
+**B2, height.** Level 5's vertical total is 454dp against roughly 464dp available.
+The outer `Column` is unscrollable and unweighted, so the picker — the last child —
+absorbs any shortfall as zero height. At a 1.2x Display size on a 360x640 device,
+and at "largest" on a 360x800 device, the child taps all ten animals, reaches the
+end of level 5, and there is nothing on screen to tap next.
+
+**The integrator's part in this, recorded plainly.** Round 3's blocker was that ten
+12dp pips in a single row made the widest option 186dp, so three options needed
+536dp and the outer digits clipped off both edges. That enlargement was itself an
+integrator instruction — the pips had been 8dp and read as a dashed bar rather than
+countable things. The integrator then fixed the clipping directly rather than
+spending a fourth round, by wrapping the pips at five per row.
+
+The wrap was validated against "288dp of screen", which is the pre-padding width at
+exactly 360dp, so the check did not generalise — B1. And stacking the pips made each
+option 6dp taller, which cut the vertical margin from 26dp to 10dp — B2. Both
+blockers are downstream of a fix made outside the round bound, on the reasoning that
+correcting one's own regression is not a fourth round. That reasoning still holds,
+but the fix repeated the very mistake it was correcting: a number checked against
+one device rather than derived from a measurement.
+
+**What it needs.** Measure both axes with a real `BoxWithConstraints`, following
+`games/musicpad`'s pure-function shape — but deriving the content box from the same
+chain the runtime uses rather than hand-subtracting it, which is the mistake that
+parked `musicpad` itself. Then decide what level 5 gives up on a short screen: fewer
+numeral options, a narrower picker, or groups that share vertical space differently.
+That last part is a content decision, which is why this parks rather than taking
+another pass.
+
+---
+
 ## Cross-cutting issues found while reviewing (not module defects)
 
 **Nothing in the app makes a sound, and nothing ever has.** `SoundBank.resourceFor`
