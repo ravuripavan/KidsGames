@@ -5,6 +5,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -32,7 +34,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -246,38 +250,61 @@ private fun RoadView(
             }
         }
 
-        LaneDividers(laneCount = state.laneCount)
+        LaneDividers(laneCount = state.laneCount, scrollProgress = scrollProgress)
     }
 }
 
-/** Draws real road edges and lane dividers so lanes are visually distinct. */
+/**
+ * Road edges and lane dividers. The dividers are DASHED and slide downward
+ * with [scrollProgress], which is what actually sells "we are driving" -- an
+ * endless drive whose road never moves reads as a parked car.
+ *
+ * [scrollProgress] runs 0f..1f once per row-tick and then restarts, so the
+ * dash offset is taken modulo the dash period: the pattern lands exactly one
+ * period further on each cycle and the restart is therefore invisible. It is
+ * driven by the caller's existing value rather than a second animation, so
+ * the paint can never drift out of step with the obstacles moving past it.
+ */
 @Composable
-private fun LaneDividers(laneCount: Int) {
+private fun LaneDividers(laneCount: Int, scrollProgress: Float) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val laneWidth = size.width / laneCount
         val strokeWidth = 4.dp.toPx()
-        // Road edges.
+        // Road edges: solid, pale, the kerb.
+        val edge = Color(0xFFF2F2F2)
         drawLine(
-            color = KidPalette.OnSurface.copy(alpha = 0.5f),
+            color = edge,
             start = Offset(strokeWidth / 2, 0f),
             end = Offset(strokeWidth / 2, size.height),
             strokeWidth = strokeWidth,
         )
         drawLine(
-            color = KidPalette.OnSurface.copy(alpha = 0.5f),
+            color = edge,
             start = Offset(size.width - strokeWidth / 2, 0f),
             end = Offset(size.width - strokeWidth / 2, size.height),
             strokeWidth = strokeWidth,
         )
-        // Dividers between lanes.
+        // Dividers between lanes: moving dashes.
+        val dashLength = 28.dp.toPx()
+        val gapLength = 22.dp.toPx()
+        val period = dashLength + gapLength
+        val shift = (scrollProgress % 1f) * period
         for (lane in 1 until laneCount) {
             val x = laneWidth * lane
-            drawLine(
-                color = KidPalette.OnSurface.copy(alpha = 0.35f),
-                start = Offset(x, 0f),
-                end = Offset(x, size.height),
-                strokeWidth = strokeWidth / 2,
-            )
+            var y = shift - period
+            while (y < size.height) {
+                val top = y.coerceAtLeast(0f)
+                val bottom = (y + dashLength).coerceAtMost(size.height)
+                if (bottom > top) {
+                    drawLine(
+                        color = Color(0xFFFFF3C4),
+                        start = Offset(x, top),
+                        end = Offset(x, bottom),
+                        strokeWidth = strokeWidth / 2,
+                    )
+                }
+                y += period
+            }
         }
     }
 }
@@ -391,18 +418,22 @@ private fun RoadItemView(
         ) {
             when (item) {
                 RoadItem.STAR -> if (isBranch) BranchMarkerShape() else StarShape()
-                RoadItem.OBSTACLE -> Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(KidPalette.OnSurface.copy(alpha = 0.65f)),
+                // A real road barrel. Still distinguished from a ramp by
+                // SHAPE as well as colour -- barrel versus arrow -- so the
+                // two never rely on hue alone to be told apart.
+                RoadItem.OBSTACLE -> Image(
+                    painter = painterResource(id = R.drawable.obstacle_barrel),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
                 )
-                RoadItem.RAMP -> Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(50))
-                        .background(KidPalette.Orange.copy(alpha = 0.75f))
-                        .border(BorderStroke(3.dp, KidPalette.OnSurface.copy(alpha = 0.4f)), CircleShape),
+                // An upward chevron reads as "go / boost" to a pre-reader far
+                // better than the old orange disc did.
+                RoadItem.RAMP -> Image(
+                    painter = painterResource(id = R.drawable.road_arrow),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
                 )
                 RoadItem.NONE -> Unit
             }
@@ -457,15 +488,25 @@ private fun CarView(bounceOffset: Float, hopOffset: Float, modifier: Modifier = 
     // Ramp hop: the car lifts up and grows slightly, a brief visible arc,
     // never a lane change and never a state change.
     val hopLift = -(hopOffset * 28).dp
-    Box(
+    // The drawable is a top-down car, taller than it is wide (71x131). It is
+    // sized by WIDTH and left to take the height its aspect ratio demands via
+    // ContentScale.Fit, so it can never render as a stretched blob -- the
+    // failure a square .size() on a non-square asset would produce.
+    Image(
+        painter = painterResource(id = R.drawable.car_blue),
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
         modifier = modifier
             .offset(y = hopLift)
-            .size(MinTapTarget * 0.7f)
-            .scale((1f - bounceOffset * 0.3f) * (1f + hopOffset * 0.15f))
-            .clip(RoundedCornerShape(12.dp))
-            .background(KidPalette.Blue),
+            .width(MinTapTarget * 0.7f)
+            .scale((1f - bounceOffset * 0.3f) * (1f + hopOffset * 0.15f)),
     )
 }
 
+/**
+ * Asphalt, not paper. The lanes alternate between two near-identical dark
+ * greys purely so the lane boundary is legible; the road must read as one
+ * continuous surface, which the old Surface/near-white pair did not.
+ */
 private fun laneBackground(lane: Int, laneCount: Int): Color =
-    if (lane % 2 == 0) KidPalette.Surface else Color(0xFFE9E9E9)
+    if (lane % 2 == 0) Color(0xFF4A4E54) else Color(0xFF44484E)

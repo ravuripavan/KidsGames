@@ -36,8 +36,10 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -165,7 +167,15 @@ object MatchShapesGame : GameModule {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(KidPalette.Background),
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            KidPalette.Pink.copy(alpha = 0.18f),
+                            KidPalette.Background,
+                            KidPalette.Green.copy(alpha = 0.14f),
+                        ),
+                    ),
+                ),
         ) {
             FlowRow(
                 modifier = Modifier
@@ -265,11 +275,30 @@ private fun androidx.compose.ui.unit.IntSize.toSize(): androidx.compose.ui.geome
  */
 @Composable
 private fun HoleView(hole: HoleItem, color: Color, filled: Boolean, modifier: Modifier = Modifier) {
+    // Correct-match confirmation: a small bounce the moment this hole flips
+    // from empty to filled. `filled` is derived from `matched`, which -- like
+    // every field this state machine ever produces -- only ever goes
+    // false -> true and never regresses (see MatchShapesState.drop), so
+    // keying this LaunchedEffect on `filled` cannot restart or replay
+    // mid-flight.
+    val bounce = remember(hole.id) { Animatable(1f) }
+    LaunchedEffect(filled) {
+        if (filled) {
+            bounce.snapTo(0.6f)
+            bounce.animateTo(1.2f, animationSpec = tween(160))
+            bounce.animateTo(1f, animationSpec = tween(120))
+        }
+    }
     Box(
         modifier = modifier.size(MinTapTarget).padding(6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.fillMaxSize().rotate(hole.requiredRotation.toFloat())) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .rotate(hole.requiredRotation.toFloat())
+                .scale(bounce.value),
+        ) {
             drawShapeOutline(hole.kind, color, filled = filled)
         }
     }

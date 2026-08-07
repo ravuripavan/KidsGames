@@ -2,11 +2,12 @@ package com.kidsgames.popballoons
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -26,9 +27,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.kidsgames.designkit.Celebration
 import com.kidsgames.designkit.KidButton
@@ -98,6 +105,9 @@ object PopBalloonsGame : GameModule {
         // visible wobble even with sound off -- the only feedback used to be
         // an audio cue, which is silent at the spec's zero-volume baseline.
         var wobbleTriggers by remember(level) { mutableStateOf(emptyMap<Int, Int>()) }
+        // Bumped per-balloon on a SUCCESSFUL pop so BalloonView can play the
+        // fx_pop burst once, purely visual (no state meaning attached).
+        var popTriggers by remember(level) { mutableStateOf(emptyMap<Int, Int>()) }
 
         LaunchedEffect(state) {
             if (state.isComplete && !celebrating) {
@@ -111,7 +121,15 @@ object PopBalloonsGame : GameModule {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(KidPalette.Background),
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFFFFF3D6),
+                            Color(0xFFFFE3EC),
+                            Color(0xFFE3F1FF),
+                        ),
+                    ),
+                ),
         ) {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = MinTapTarget + 16.dp),
@@ -131,11 +149,14 @@ object PopBalloonsGame : GameModule {
                     BalloonView(
                         balloon = balloon,
                         wobbleTrigger = wobbleTriggers[balloon.id] ?: 0,
+                        popTrigger = popTriggers[balloon.id] ?: 0,
                         onTap = {
                             val next = state.pop(balloon.id)
                             val tappedNowPopped = next.balloons.first { it.id == balloon.id }.popped
                             if (tappedNowPopped) {
                                 state = next
+                                popTriggers = popTriggers +
+                                    (balloon.id to (popTriggers[balloon.id] ?: 0) + 1)
                                 soundBank.play(SoundBank.Cue.SUCCESS)
                             } else {
                                 wobbleTriggers = wobbleTriggers +
@@ -152,7 +173,7 @@ object PopBalloonsGame : GameModule {
             // happened and the child has no way to discover the goal.
             if (level >= 4 && !celebrating) {
                 TargetColorSwatch(
-                    color = state.targetColor.toComposeColor(),
+                    color = state.targetColor,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp),
                 )
             }
@@ -164,35 +185,124 @@ object PopBalloonsGame : GameModule {
     }
 }
 
+/**
+ * L4/L5's "pop this one" cue, now drawn as the actual balloon artwork for
+ * the target colour (body + face) instead of an abstract flat swatch, so the
+ * child recognises the thing they're hunting on sight.
+ */
 @Composable
-private fun TargetColorSwatch(color: Color, modifier: Modifier = Modifier) {
+private fun TargetColorSwatch(color: BalloonColor, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .size(56.dp)
-            .background(color, CircleShape)
+            .size(64.dp)
             .border(4.dp, KidPalette.Background, CircleShape)
-            .border(6.dp, Color.White.copy(alpha = 0.9f), CircleShape),
-    )
+            .border(6.dp, Color.White.copy(alpha = 0.9f), CircleShape)
+            .padding(6.dp),
+    ) {
+        BalloonArtwork(color = color, modifier = Modifier.fillMaxSize())
+    }
+}
+
+/**
+ * The coloured body + face composite shared by [BalloonView] and
+ * [TargetColorSwatch]. Exhaustive `when` over [BalloonColor] with no `else`
+ * so a colour added later without matching art fails the build instead of
+ * silently drawing nothing.
+ *
+ * NOTE: [BalloonColor.ORANGE] has no staged `balloon_orange.png` in
+ * drawable-nodpi (only red/blue/green/yellow/purple/pink shipped). Rather
+ * than silently drop orange balloons from the game -- which L3-L5 use as
+ * real gameplay colours, including as the L4 decoy colour -- this tints the
+ * yellow body art towards `KidPalette.Orange` as a stand-in. This is a
+ * flagged compromise, not a silent one: see the final report for the
+ * missing-asset callout.
+ */
+@Composable
+private fun BalloonArtwork(color: BalloonColor, modifier: Modifier = Modifier) {
+    val bodyRes = when (color) {
+        BalloonColor.RED -> R.drawable.balloon_red
+        BalloonColor.ORANGE -> R.drawable.balloon_yellow
+        BalloonColor.YELLOW -> R.drawable.balloon_yellow
+        BalloonColor.GREEN -> R.drawable.balloon_green
+        BalloonColor.BLUE -> R.drawable.balloon_blue
+        BalloonColor.PURPLE -> R.drawable.balloon_purple
+        BalloonColor.PINK -> R.drawable.balloon_pink
+    }
+    val tint = if (color == BalloonColor.ORANGE) {
+        ColorFilter.tint(KidPalette.Orange, BlendMode.Modulate)
+    } else {
+        null
+    }
+    Box(modifier = modifier) {
+        Image(
+            painter = painterResource(id = bodyRes),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            colorFilter = tint,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Image(
+            painter = painterResource(id = R.drawable.balloon_face),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
 }
 
 @Composable
-private fun BalloonView(balloon: Balloon, wobbleTrigger: Int, onTap: () -> Unit) {
+private fun BalloonView(
+    balloon: Balloon,
+    wobbleTrigger: Int,
+    popTrigger: Int,
+    onTap: () -> Unit,
+) {
     val visualSize = MinTapTarget * balloon.size.coerceAtLeast(1f)
 
     // Popped balloons still occupy their grid cell (see the caller's
     // comment on why the balloon list is never filtered) but must neither
-    // be visible nor tappable. A same-size, alpha-0, non-clickable Box
-    // keeps the cell's dimensions in the grid layout without drawing or
-    // reacting to touch.
+    // be visible nor tappable. They still play a brief burst animation the
+    // instant they're popped (keyed on balloon id + the monotonically
+    // increasing popTrigger, never on the whole balloon/state object, so it
+    // can't restart or skip mid-flight), then settle into the same
+    // same-size, invisible, non-clickable placeholder as before, keeping
+    // the cell's dimensions in the grid layout without drawing or reacting
+    // to touch.
     if (balloon.popped) {
-        Box(modifier = Modifier.size(visualSize).padding(4.dp))
+        val fxAlpha = remember(balloon.id) { Animatable(0f) }
+        val fxScale = remember(balloon.id) { Animatable(0.6f) }
+        LaunchedEffect(balloon.id, popTrigger) {
+            if (popTrigger > 0) {
+                fxAlpha.snapTo(1f)
+                fxScale.snapTo(0.6f)
+                fxScale.animateTo(1.4f, animationSpec = tween(320))
+            }
+        }
+        LaunchedEffect(balloon.id, popTrigger) {
+            if (popTrigger > 0) {
+                fxAlpha.animateTo(0f, animationSpec = tween(320))
+            }
+        }
+        Box(modifier = Modifier.size(visualSize).padding(4.dp), contentAlignment = Alignment.Center) {
+            if (fxAlpha.value > 0f) {
+                Image(
+                    painter = painterResource(id = R.drawable.fx_pop),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(visualSize)
+                        .scale(fxScale.value)
+                        .padding(4.dp),
+                    alpha = fxAlpha.value,
+                )
+            }
+        }
         return
     }
 
     // A soft scale-bounce on a wrong tap -- visible, non-punitive feedback
     // that works even with sound off.
     val wobble = remember(balloon.id) { Animatable(1f) }
-    LaunchedEffect(wobbleTrigger) {
+    LaunchedEffect(balloon.id, wobbleTrigger) {
         if (wobbleTrigger > 0) {
             wobble.animateTo(0.85f, animationSpec = tween(90))
             wobble.animateTo(1f, animationSpec = tween(150))
@@ -218,20 +328,35 @@ private fun BalloonView(balloon: Balloon, wobbleTrigger: Int, onTap: () -> Unit)
         0f
     }
 
+    // A gentle idle bob so the screen feels alive even on the still (L1)
+    // and non-drifting balloons: low amplitude, slow, and staggered per
+    // balloon via a per-id start delay so the board doesn't move in
+    // lockstep. Distinct from `drift`, which is the existing lateral sway
+    // used only at L2+; this bob applies to every balloon at every level.
+    val bob = remember(balloon.id) { Animatable(0f) }
+    LaunchedEffect(balloon.id) {
+        delay((balloon.id % 7) * 140L)
+        while (true) {
+            bob.animateTo(1f, animationSpec = tween(1500 + (balloon.id % 4) * 130, easing = LinearEasing))
+            bob.animateTo(0f, animationSpec = tween(1500 + (balloon.id % 4) * 130, easing = LinearEasing))
+        }
+    }
+    val bobOffset = bob.value * 4f
+
+    // A small per-balloon tilt gives balloons a distinct silhouette beyond
+    // colour alone (the shared face/body art is otherwise identical across
+    // colours), staggered by id so neighbours don't read as clones.
+    val tilt = ((balloon.id % 5) - 2) * 3f
+
     KidButton(
         onClick = onTap,
         modifier = Modifier
             .size(visualSize)
-            .offset(y = drift.dp)
+            .offset(y = (drift + bobOffset).dp)
             .scale(wobble.value)
+            .rotate(tilt)
             .padding(4.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(balloon.color.toComposeColor(), CircleShape),
-        )
+        BalloonArtwork(color = balloon.color, modifier = Modifier.fillMaxSize())
     }
 }
-
-private fun BalloonColor.toComposeColor(): Color = KidPalette.Swatch[this.ordinal]

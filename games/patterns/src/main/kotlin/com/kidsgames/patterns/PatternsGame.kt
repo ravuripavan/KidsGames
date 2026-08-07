@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -136,7 +137,15 @@ object PatternsGame : GameModule {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(KidPalette.Background),
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            KidPalette.Yellow.copy(alpha = 0.25f),
+                            KidPalette.Background,
+                            KidPalette.Blue.copy(alpha = 0.12f),
+                        ),
+                    ),
+                ),
         ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
@@ -339,6 +348,24 @@ private fun SequenceSlot(
         }
     }
 
+    // Correct-answer confirmation: a small bounce the moment this exact slot
+    // resolves from blank to filled. `isBlank` is keyed on `slotIndex`, whose
+    // identity is stable for this composable's whole lifetime (see
+    // SequenceRow's per-slot-item invariant), and it only ever flips
+    // true -> false ONCE per slot -- state.blankIndex strictly advances and
+    // never revisits a resolved index (see PatternsState KDoc) -- so keying
+    // this LaunchedEffect on `isBlank` cannot restart or replay mid-flight,
+    // the same stable-once-flipped pattern the class KDoc already documents
+    // for `state.isComplete`.
+    val bounce = remember(slotIndex) { Animatable(1f) }
+    LaunchedEffect(isBlank) {
+        if (!isBlank) {
+            bounce.snapTo(0.55f)
+            bounce.animateTo(1.18f, animationSpec = tween(160))
+            bounce.animateTo(1f, animationSpec = tween(120))
+        }
+    }
+
     val groupShape = RoundedCornerShape(
         topStart = if (isGroupStart) 20.dp else 0.dp,
         bottomStart = if (isGroupStart) 20.dp else 0.dp,
@@ -364,7 +391,7 @@ private fun SequenceSlot(
             .border(2.dp, KidPalette.OnSurface.copy(alpha = 0.18f), groupShape)
             .padding(6.dp)
             .size(slotSize)
-            .scale(if (isBlank) wobble.value else 1f),
+            .scale(if (isBlank) wobble.value else bounce.value),
         contentAlignment = Alignment.Center,
     ) {
         if (isBlank || category == null) {
