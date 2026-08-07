@@ -152,6 +152,24 @@ Each solved it locally with shape or pip-count markers, which is the right answe
 for accessibility anyway — but a shared swatch that carries distinct non-colour
 markers would stop each module reinventing it.
 
+**`:core:vocab`'s daily content does not last a year.** The spec promises a pool
+that "holds a full year with no repeats". Two ways it falls short, both found while
+reviewing `:games:talktime` and both outside any game module's boundary:
+
+- `VocabCatalogue.items` holds 144 entries and `DailyPicker` indexes
+  `(dayOfYear - 1) % items.size`, so day 145 serves the same word as day 1 and the
+  word repeats roughly two and a half times a year.
+- `DailyPicker` appends 51 hand-written phrases and then generates the rest from
+  two templates in order, so days 52-206 are all "I see a ___" and days 207-361 are
+  all "look at the ___". Five straight months of a single sentence frame is not the
+  varied daily language the spec describes.
+
+Neither blocks a module today — `:games:talktime`'s level 4 and 5 now key off
+`Sentence.image`, which is backed by the larger sentence pool — but both undercut
+the daily-rotation promise that justifies the feature. Fixing means authoring more
+catalogue content, so it belongs with the artwork and audio decision rather than
+with a code fix.
+
 **Stale hand-reserved exit zones.** Modules built before the shell reserved the
 exit strip structurally may still pad for it themselves. `:games:memorypairs`
 carried 104dp of bottom padding duplicating `GameHost`'s 96dp, which cost it a
