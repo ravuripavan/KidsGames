@@ -163,10 +163,14 @@ object CarWashGame : GameModule {
         }
 
         fun handleScrubAt(localX: Float, localY: Float, gridWidthPx: Float, gridHeightPx: Float) {
-            val col = ((localX / gridWidthPx) * CarWashState.GRID_COLS).toInt()
-                .coerceIn(0, CarWashState.GRID_COLS - 1)
-            val row = ((localY / gridHeightPx) * CarWashState.GRID_ROWS).toInt()
-                .coerceIn(0, CarWashState.GRID_ROWS - 1)
+            // Off the car entirely -- do nothing at all. Not a fail state:
+            // no cue, no penalty, no state change, exactly as if the screen
+            // had not been touched. The previous version clamped a
+            // background touch into the nearest cell, which let a child
+            // scrub the empty cream surround and finish the wash without
+            // ever touching the vehicle.
+            val cell = CarWashState.cellAt(localX, localY, gridWidthPx, gridHeightPx) ?: return
+            val (row, col) = cell
 
             touchPoint = Offset(localX, localY)
             touchTrigger += 1
@@ -529,14 +533,16 @@ private fun CarCanvas(dirt: List<Float>) {
         // Dirt overlay: one translucent brown blob per grid cell whose
         // dirt is still above zero, sized and centred on that cell -- the
         // SAME grid CarWashState.scrub() reads coordinates into.
-        val cellW = w / CarWashState.GRID_COLS
-        val cellH = h / CarWashState.GRID_ROWS
+        // Cell centres come from CarWashState.cellCenter, the exact inverse
+        // of the cellAt() the touch handler uses, so a blob is always drawn
+        // on the cell that scrubbing that blob will clean.
+        val cellW = (CarWashState.CAR_RIGHT - CarWashState.CAR_LEFT) * w / CarWashState.GRID_COLS
+        val cellH = (CarWashState.CAR_BOTTOM - CarWashState.CAR_TOP) * h / CarWashState.GRID_ROWS
         for (row in 0 until CarWashState.GRID_ROWS) {
             for (col in 0 until CarWashState.GRID_COLS) {
                 val amount = dirt.getOrNull(row * CarWashState.GRID_COLS + col) ?: 0f
                 if (amount <= 0f) continue
-                val cx = cellW * (col + 0.5f)
-                val cy = cellH * (row + 0.5f)
+                val (cx, cy) = CarWashState.cellCenter(row, col, w, h)
                 drawCircle(
                     color = DIRT_COLOR.copy(alpha = 0.55f * amount.coerceAtMost(1f)),
                     radius = min(cellW, cellH) * 0.55f,

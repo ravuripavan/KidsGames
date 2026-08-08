@@ -89,6 +89,82 @@ data class CarWashState(
         const val GRID_COLS = 8
 
         /**
+         * The car's bounding box inside the play surface, as fractions of
+         * the surface's width and height. These MUST match the shape drawn
+         * by `CarCanvas`: the roof starts at [CAR_TOP], the body ends at
+         * [CAR_BOTTOM], and the body spans [CAR_LEFT]..[CAR_RIGHT].
+         *
+         * The dirt grid is laid over THIS rectangle, not over the whole
+         * surface. It used to cover the whole surface, which put entire rows
+         * of dirt on empty background above the roof and below the wheels --
+         * and because the touch mapping clamped out-of-range coordinates
+         * back into the grid, a child could scrub the empty background and
+         * clean the car without ever touching it. That defeated the entire
+         * activity, so the grid and the hit test both derive from here.
+         */
+        const val CAR_LEFT = 0.06f
+        const val CAR_RIGHT = 0.94f
+
+        /**
+         * The grid covers the car's flat BODY only, not the roof.
+         *
+         * The roof is a trapezoid, narrowing from [CAR_LEFT]..[CAR_RIGHT] at
+         * its base to roughly 0.32..0.68 at its top, and a rectangular grid
+         * laid over it necessarily puts its outer cells on the background
+         * either side of the windscreen -- which is the same defect at
+         * smaller scale. Tapering the bounds per row would instead strand
+         * cells that can be drawn but never touched, so that a child could
+         * see dirt they are unable to clean.
+         *
+         * Restricting the grid to the rectangular body means every one of
+         * the [GRID_ROWS] x [GRID_COLS] cells lies on painted metal, is
+         * reachable, and is cleanable. The roof simply never gets dirty.
+         */
+        const val CAR_TOP = 0.42f
+        const val CAR_BOTTOM = 0.78f
+
+        /**
+         * Maps a touch at ([x], [y]) on a [width] x [height] surface to a
+         * `(row, col)` cell, or `null` when the touch is not on the car at
+         * all.
+         *
+         * Returning `null` is NOT a fail state: the caller simply does
+         * nothing, exactly as if the child had not touched the screen. There
+         * is no penalty, no error cue and no state change -- touching beside
+         * the car is neither punished nor rewarded.
+         *
+         * Pure arithmetic with no Android dependency so it can be tested
+         * exhaustively over the whole surface rather than at a few sample
+         * points, and so the drawing and the hit test cannot drift apart:
+         * both call this, or the inverse [cellCenter], and nothing else.
+         */
+        fun cellAt(x: Float, y: Float, width: Float, height: Float): Pair<Int, Int>? {
+            if (width <= 0f || height <= 0f) return null
+            val left = CAR_LEFT * width
+            val right = CAR_RIGHT * width
+            val top = CAR_TOP * height
+            val bottom = CAR_BOTTOM * height
+            if (x < left || x >= right || y < top || y >= bottom) return null
+            val col = (((x - left) / (right - left)) * GRID_COLS).toInt().coerceIn(0, GRID_COLS - 1)
+            val row = (((y - top) / (bottom - top)) * GRID_ROWS).toInt().coerceIn(0, GRID_ROWS - 1)
+            return row to col
+        }
+
+        /**
+         * The centre of cell ([row], [col]) on a [width] x [height] surface.
+         * The exact inverse of [cellAt]: `cellAt(cellCenter(r, c)) == (r, c)`
+         * for every cell, which is the property the accompanying test
+         * asserts by enumerating all [GRID_ROWS] x [GRID_COLS] of them.
+         */
+        fun cellCenter(row: Int, col: Int, width: Float, height: Float): Pair<Float, Float> {
+            val left = CAR_LEFT * width
+            val top = CAR_TOP * height
+            val cellW = (CAR_RIGHT - CAR_LEFT) * width / GRID_COLS
+            val cellH = (CAR_BOTTOM - CAR_TOP) * height / GRID_ROWS
+            return (left + cellW * (col + 0.5f)) to (top + cellH * (row + 0.5f))
+        }
+
+        /**
          * Which tools are on the tray at [level]. Strictly non-decreasing in
          * COUNT across levels 1-5 (1, 2, 3, 5, 5) -- see
          * `CarWashStateTest."tool count is non-decreasing across levels one through five"`
