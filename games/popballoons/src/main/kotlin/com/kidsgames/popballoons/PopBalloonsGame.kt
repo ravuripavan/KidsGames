@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -133,7 +134,24 @@ object PopBalloonsGame : GameModule {
         ) {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = MinTapTarget + 16.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
+                // At L4/L5 the first row starts BELOW the target cue instead
+                // of underneath it. The cue used to be an overlay sitting on
+                // top of row 1: same artwork, roughly the same size, between
+                // two real balloons and distinguished only by a thin ring,
+                // so a child read it as one more balloon and it occluded two
+                // playable ones.
+                //
+                // Reserved through the grid's own contentPadding rather than
+                // as a sibling strip on purpose. A strip would take its
+                // height off the grid, and at L5 on a 360dp phone this grid
+                // is already close to needing to scroll; padding keeps the
+                // full height available and only pushes the first row down.
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 24.dp,
+                    end = 24.dp,
+                    bottom = 24.dp,
+                    top = if (level >= 4) CUE_RESERVED_HEIGHT else 24.dp,
+                ),
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize(),
@@ -186,20 +204,33 @@ object PopBalloonsGame : GameModule {
 }
 
 /**
- * L4/L5's "pop this one" cue, now drawn as the actual balloon artwork for
- * the target colour (body + face) instead of an abstract flat swatch, so the
- * child recognises the thing they're hunting on sight.
+ * Height reserved above the grid for [TargetColorSwatch] at L4/L5, including
+ * the breathing room the grid's normal 24dp top padding would have given.
+ */
+private val CUE_RESERVED_HEIGHT = 96.dp
+
+/**
+ * L4/L5's "pop this one" cue: the actual balloon artwork for the target
+ * colour, mounted on a rounded PLAQUE.
+ *
+ * The plaque is the point. Showing the target as bare balloon art made the
+ * cue indistinguishable from the balloons themselves -- every balloon is a
+ * circle, so a circular cue is just a seventh balloon wearing a ring. A
+ * rounded rectangle is a silhouette that appears nowhere else on this
+ * screen, so "this is an instruction, not a thing to tap" is carried by
+ * shape rather than by a border a child has to notice and interpret.
  */
 @Composable
 private fun TargetColorSwatch(color: BalloonColor, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .size(64.dp)
-            .border(4.dp, KidPalette.Background, CircleShape)
-            .border(6.dp, Color.White.copy(alpha = 0.9f), CircleShape)
-            .padding(6.dp),
+            .size(width = 92.dp, height = 64.dp)
+            .background(Color.White.copy(alpha = 0.92f), RoundedCornerShape(18.dp))
+            .border(3.dp, KidPalette.OnSurface.copy(alpha = 0.25f), RoundedCornerShape(18.dp))
+            .padding(8.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        BalloonArtwork(color = color, modifier = Modifier.fillMaxSize())
+        BalloonArtwork(color = color, modifier = Modifier.size(44.dp))
     }
 }
 

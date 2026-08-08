@@ -250,23 +250,51 @@ private fun RoadView(
             }
         }
 
-        LaneDividers(laneCount = state.laneCount, scrollProgress = scrollProgress)
+        LaneDividers(
+            laneCount = state.laneCount,
+            scrollProgress = scrollProgress,
+            // How far a road row travels in one tick. The dividers must
+            // advance by exactly this much per tick or the paint crawls
+            // relative to the traffic moving over it.
+            rowAdvance = if (state.rows.isEmpty()) travelHeight else travelHeight / state.rows.size,
+        )
     }
 }
+
+/**
+ * How many dash-and-gap cycles the paint shows per road row.
+ *
+ * The dash period is DERIVED from [LaneDividers]'s `rowAdvance` rather than
+ * being a fixed dp value, and that is the whole trick. It buys two
+ * properties at once that a fixed period cannot have together:
+ *
+ *  - **The paint moves at the traffic's speed.** The first version used a
+ *    fixed 50dp period and advanced the pattern one period per tick, while a
+ *    road row advances `travelHeight / rowCount` -- two unrelated speeds. On
+ *    the device the markings visibly crawled while the stars and barrels
+ *    swept past, which undercut the very motion the dashes were added to
+ *    convey.
+ *  - **The wrap stays invisible.** [scrollProgress] runs 0f..1f once per tick
+ *    and then restarts. Because one tick advances the pattern by exactly
+ *    this many whole periods, the offset at `scrollProgress == 1f` is
+ *    congruent modulo the period to the offset at `0f`, so the restart lands
+ *    the pattern exactly on itself. Any period that did not divide the row
+ *    advance evenly would jump on every tick.
+ */
+private const val DASHES_PER_ROW = 2
 
 /**
  * Road edges and lane dividers. The dividers are DASHED and slide downward
  * with [scrollProgress], which is what actually sells "we are driving" -- an
  * endless drive whose road never moves reads as a parked car.
  *
- * [scrollProgress] runs 0f..1f once per row-tick and then restarts, so the
- * dash offset is taken modulo the dash period: the pattern lands exactly one
- * period further on each cycle and the restart is therefore invisible. It is
- * driven by the caller's existing value rather than a second animation, so
- * the paint can never drift out of step with the obstacles moving past it.
+ * [rowAdvance] is how far a road row travels in one tick; the dash pattern
+ * advances by exactly that, split into [DASHES_PER_ROW] cycles. It is driven
+ * by the caller's existing scroll value rather than a second animation, so
+ * the paint cannot drift out of step with the obstacles moving over it.
  */
 @Composable
-private fun LaneDividers(laneCount: Int, scrollProgress: Float) {
+private fun LaneDividers(laneCount: Int, scrollProgress: Float, rowAdvance: Dp) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val laneWidth = size.width / laneCount
         val strokeWidth = 4.dp.toPx()
@@ -284,14 +312,17 @@ private fun LaneDividers(laneCount: Int, scrollProgress: Float) {
             end = Offset(size.width - strokeWidth / 2, size.height),
             strokeWidth = strokeWidth,
         )
-        // Dividers between lanes: moving dashes.
-        val dashLength = 28.dp.toPx()
-        val gapLength = 22.dp.toPx()
-        val period = dashLength + gapLength
-        val shift = (scrollProgress % 1f) * period
+
+        // Dividers between lanes: dashes moving at the traffic's own speed.
+        val period = (rowAdvance.toPx() / DASHES_PER_ROW).coerceAtLeast(1f)
+        val dashLength = period * 0.55f
+        val shift = (scrollProgress % 1f) * rowAdvance.toPx()
         for (lane in 1 until laneCount) {
             val x = laneWidth * lane
-            var y = shift - period
+            // Start one period above the top so a dash entering the screen is
+            // never clipped into existence. `period` is >= 1px, so this loop
+            // always advances and always terminates.
+            var y = (shift % period) - period
             while (y < size.height) {
                 val top = y.coerceAtLeast(0f)
                 val bottom = (y + dashLength).coerceAtMost(size.height)
@@ -509,4 +540,4 @@ private fun CarView(bounceOffset: Float, hopOffset: Float, modifier: Modifier = 
  * continuous surface, which the old Surface/near-white pair did not.
  */
 private fun laneBackground(lane: Int, laneCount: Int): Color =
-    if (lane % 2 == 0) Color(0xFF4A4E54) else Color(0xFF44484E)
+    if (lane % 2 == 0) Color(0xFF51565D) else Color(0xFF3E4248)
